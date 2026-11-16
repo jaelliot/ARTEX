@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +107,48 @@ print("port=" + str(a["port"]))
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestExecPythonBoundsOutput(t *testing.T) {
+	interp, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	out, err := execPython(context.Background(), interp, "test", `print("x" * 2000000)`, nil, t.TempDir(), nil, 5*time.Second)
+	if err != nil || !strings.Contains(out, "[script output truncated]") || len(out) > maxScriptOutput+128 {
+		t.Fatalf("output was not bounded: len=%d err=%v", len(out), err)
+	}
+}
+
+func TestExecPythonTimeoutStopsChild(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group cleanup is implemented on Linux")
+	}
+	interp, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	dir := t.TempDir()
+	code := `import subprocess,sys,time
+subprocess.Popen([sys.executable, "-c", "import time; open('child-started', 'w').close(); time.sleep(1); open('child-ran', 'w').close()"])
+time.sleep(10)`
+	out, err := execPython(context.Background(), interp, "test", code, nil, dir, nil, 500*time.Millisecond)
+	if err != nil || !strings.Contains(out, "[terminated on timeout]") {
+		t.Fatalf("script did not time out: %q %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "child-started")); err != nil {
+		t.Fatalf("child did not start before cancellation: %v", err)
+	}
+	time.Sleep(time.Second)
+	if _, err := os.Stat(filepath.Join(dir, "child-ran")); !os.IsNotExist(err) {
+		t.Fatalf("child continued after cancellation: %v", err)
+	}
+}
+
+func TestCustomToolTimeoutBound(t *testing.T) {
+	if got := timeoutOr(int(^uint(0)>>1), 1000); got != 10*time.Minute {
+		t.Fatalf("timeout = %v, want 10m", got)
 	}
 }
 

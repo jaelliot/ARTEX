@@ -1,0 +1,22 @@
+[Unit]
+Description=ARTEX inference reverse proxy
+Requires=artex-firewall.service
+After=artex-firewall.service network.target
+[Service]
+User=nobody
+Group=nogroup
+Environment=HOME=/tmp
+ExecStart=/usr/local/bin/artex-caddy run --config /etc/artex-gateway/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=1024
+[Install]
+WantedBy=multi-user.target

@@ -140,6 +140,10 @@ const (
 // OpenAI's public endpoint).
 const FormatOllama llm.Format = "ollama"
 
+// FormatOpenAIKeyless is an explicitly configured OpenAI-compatible endpoint
+// that must never inherit or send a cloud API key.
+const FormatOpenAIKeyless llm.Format = "openai-keyless"
+
 // DefaultOllamaBaseURL is the base of Ollama's OpenAI-compatible endpoint the
 // provider appends /chat/completions to. Must never end up empty: with an
 // empty BaseURL, the SDK would fall back to OpenAI's public endpoint.
@@ -170,7 +174,17 @@ func normalizeOllamaBaseURL(raw string) string {
 
 // NeedsAPIKey reports whether this provider format requires an API key to be
 // usable. Ollama (local server) is keyless; every cloud format needs one.
-func (c Config) NeedsAPIKey() bool { return c.Format != FormatOllama }
+func (c Config) NeedsAPIKey() bool {
+	return c.Format != FormatOllama && c.Format != FormatOpenAIKeyless
+}
+
+func ValidateKeylessBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("keyless OpenAI-compatible provider requires an explicit HTTP(S) base URL without credentials, query, or fragment")
+	}
+	return nil
+}
 
 // CompactionWindow returns the model context window in TOKENS for compaction
 // thresholds, resolved from the user-configured size (ContextWindowK). 0/unset →
@@ -245,6 +259,12 @@ func FromEnv() (Config, bool) {
 		if c.Model == "" {
 			c.Model = "gpt-5"
 		}
+	case "openai-keyless":
+		c.Format = FormatOpenAIKeyless
+		c.BaseURL = strings.TrimRight(strings.TrimSuffix(strings.TrimSpace(c.BaseURL), "/chat/completions"), "/")
+		if ValidateKeylessBaseURL(c.BaseURL) != nil || strings.TrimSpace(c.Model) == "" {
+			return Config{}, false
+		}
 	case "ollama":
 		c.Format = FormatOllama
 		// Deliberately NOT inheriting OPENAI_API_KEY: a local Ollama ignores the
@@ -296,6 +316,10 @@ func ConfigFrom(provider, model, baseURL, apiKey, proxy string) Config {
 		if c.Model == "" {
 			c.Model = "gpt-5"
 		}
+	case "openai-keyless":
+		c.Format = FormatOpenAIKeyless
+		c.BaseURL = strings.TrimRight(strings.TrimSuffix(c.BaseURL, "/chat/completions"), "/")
+		c.APIKey = ""
 	case "ollama":
 		c.Format = FormatOllama
 		// Ollama's OpenAI-compatible endpoint lives at /v1 and the provider
@@ -337,6 +361,8 @@ func (c Config) Provider() string {
 		return "openai-responses"
 	case FormatOllama:
 		return "ollama"
+	case FormatOpenAIKeyless:
+		return "openai-keyless"
 	}
 	return "anthropic"
 }
@@ -352,6 +378,15 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	wireFormat := c.Format
 	baseURL := c.BaseURL
 	apiKey := c.APIKey
+	if wireFormat == FormatOpenAIKeyless {
+		if err := ValidateKeylessBaseURL(baseURL); err != nil {
+			return nil, err
+		}
+		wireFormat = llm.FormatOpenAI
+		// Prevent SDK environment-key fallback; the transport removes this header.
+		apiKey = "keyless"
+		client.Transport = stripAuthorization{base: client.Transport}
+	}
 	// Ollama speaks OpenAI's Chat Completions on the wire. Bundle the keyless
 	// defaults here so an Ollama config can never leak toward the SDK's env-
 	// driven fallbacks: BaseURL to OpenAI's public endpoint, APIKey to
@@ -392,6 +427,14 @@ func (c Config) NewProvider() (llm.Provider, error) {
 		lc.RateLimit = &llm.RateLimit{PerSecond: c.RatePerSecond, PerMinute: c.RatePerMinute}
 	}
 	return llm.NewProvider(lc)
+}
+
+type stripAuthorization struct{ base http.RoundTripper }
+
+func (t stripAuthorization) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Del("Authorization")
+	return t.base.RoundTrip(r)
 }
 
 // IsQuotaExhaustedMessage deliberately recognizes only explicit balance,
@@ -602,7 +645,11 @@ func TestConnection(ctx context.Context, c Config) (time.Duration, string, error
 	if err != nil {
 		return 0, "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := 30 * time.Second
+	if c.Format == FormatOpenAIKeyless {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Capture the raw wire messages: what a connection test most needs to see is
 	// exactly what the gateway returned (status code + response body), which is gone
@@ -620,6 +667,11 @@ func TestConnection(ctx context.Context, c Config) (time.Duration, string, error
 	// effects.
 	ctx = transcript.WithSessionID(ctx, "conntest-"+transcript.NewSessionID())
 	start := time.Now()
+	maxTokens := 8192
+	if c.Format == FormatOpenAIKeyless && c.ReasoningEffort == "none" {
+		// A local, explicitly non-reasoning connection test should stay small.
+		maxTokens = 128
+	}
 	// MaxTokens must be generous: reasoning models (e.g. deepseek-v4-pro) emit a long
 	// stretch of thinking before answering (measured ~2900 tokens even for a one-word
 	// "ping"). Given only 32, the model stays stuck "thinking" until it hits the
@@ -633,7 +685,7 @@ func TestConnection(ctx context.Context, c Config) (time.Duration, string, error
 		SystemPrompt:   []string{"You are a connection test. Just output the two characters OK — no thinking, no explanation, nothing else."},
 		PermissionMode: acperm.ModeBypass,
 		MaxTurns:       1,
-		MaxTokens:      8192,
+		MaxTokens:      maxTokens,
 		NonStreaming:   !c.Stream, // use this profile's real send/receive mode for the connection test
 	}, "ping")
 	lat := time.Since(start)

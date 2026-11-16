@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Generic offline topology check. This does not verify ARTEX tool routing.
+image=${ARTEX_OFFLINE_FIXTURE_IMAGE:-golang:1.25.8-bookworm}
+prefix="artex-network-fixture-$(date +%s)-$$"
+network="$prefix-net"
+model="$prefix-model"
+database="$prefix-db"
+sibling="$prefix-sibling"
+created_network=0
+created_containers=()
+cleanup() {
+  for container in "${created_containers[@]}"; do
+    timeout 15 docker rm -f "$container" >/dev/null 2>&1 || true
+  done
+  if (( created_network )); then timeout 15 docker network rm "$network" >/dev/null 2>&1 || true; fi
+}
+trap cleanup EXIT
+
+timeout 20 docker network create --internal \
+  --opt com.docker.network.bridge.gateway_mode_ipv4=isolated "$network" >/dev/null
+created_network=1
+for item in "$model:fixture-model" "$database:fixture-db" "$sibling:fixture-sibling"; do
+  name=${item%%:*}
+  alias=${item#*:}
+  timeout 20 docker run -d --pull never --name "$name" --network "$network" --network-alias "$alias" \
+    --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+    --security-opt apparmor=docker-default --security-opt seccomp=builtin \
+    --memory 64m --memory-swap 64m --cpus 0.5 --pids-limit 16 --shm-size 1m \
+    --ulimit nofile=64:64 --ulimit fsize=8192:8192 --ulimit core=0:0 --log-driver none \
+    --tmpfs /scratch:rw,nosuid,nodev,noexec,size=8m,uid=65534,gid=65534,mode=700 \
+    --entrypoint /usr/bin/env "$image" -i PATH=/usr/bin:/bin HOME=/scratch \
+    python3 -m http.server 8080 --bind 0.0.0.0 --directory /scratch >/dev/null
+  created_containers+=("$name")
+done
+
+model_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$model")
+db_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$database")
+sibling_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$sibling")
+
+common=(--rm --pull never --read-only --user 65534:65534 --cap-drop ALL
+  --security-opt no-new-privileges --security-opt apparmor=docker-default --security-opt seccomp=builtin
+  --memory 64m --memory-swap 64m --cpus 0.5 --pids-limit 16 --shm-size 1m --ulimit nofile=64:64
+  --ulimit fsize=8192:8192 --ulimit core=0:0 --entrypoint /usr/bin/env)
+
+timeout 20 docker run "${common[@]}" --network "$network" "$image" -i PATH=/usr/bin:/bin \
+  python3 -c 'import socket,time
+for name in ("fixture-model", "fixture-db"):
+    for attempt in range(20):
+        try:
+            socket.create_connection((name, 8080), timeout=1).close()
+            break
+        except OSError:
+            if attempt == 19: raise
+            time.sleep(.2)
+print("Dummy model and database listeners reachable")'
+
+timeout 20 docker run "${common[@]}" --network none "$image" -i PATH=/usr/bin:/bin \
+  python3 -c 'import socket,sys
+for address in sys.argv[1:]:
+    try:
+        socket.create_connection((address, 8080), timeout=1).close()
+    except OSError:
+        continue
+    raise SystemExit("Unexpected worker connection to " + address)
+print("Offline worker cannot reach dummy model, database, sibling, or IPv6 loopback")' \
+  "$model_ip" "$db_ip" "$sibling_ip" ::1

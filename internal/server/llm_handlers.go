@@ -229,7 +229,7 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Retry params do [not] go into the connection test: the test has a 30s hard timeout, and stacking the configured retry counts/long intervals on top
+	// Retry params do not go into the bounded connection test; stacking configured retry counts and intervals
 	// would only turn a perfectly usable endpoint into a "timeout failure". The test asks "does this endpoint work at all"; retry pacing
 	// is a runtime concern.
 	lat, reply, err := agent.TestConnection(r.Context(), cfg)

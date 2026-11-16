@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Autumn-27/artex/internal/agent"
 	"github.com/Autumn-27/artex/internal/db"
 )
 
@@ -30,7 +31,7 @@ func (s *Server) resolutionFromProfile(p *db.LLMProfile, source string) taskLLMR
 		Source:    source,
 	}
 	// Ollama profiles are keyless by design; the other formats need a key.
-	if p.APIKey == "" && p.Format != "ollama" {
+	if p.APIKey == "" && agent.ConfigFrom(p.Format, p.Model, p.BaseURL, "", p.Proxy).NeedsAPIKey() {
 		result.Reason = "LLM profile has no API Key set"
 		return result
 	}

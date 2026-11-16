@@ -57,13 +57,15 @@ const MAX_TOKENS_FIELD_HINTS: Record<string, string> = {
   anthropic: "Only selectable for the openai format. Anthropic's field name is fixed as max_tokens.",
   "openai-responses": "Only selectable for the openai format. The Responses API's field name is fixed as max_output_tokens.",
   ollama: "Only selectable for the openai format. Ollama's field name is fixed as max_tokens.",
+  "openai-keyless": "The keyless format uses max_tokens.",
 };
 // LLM profile formats. The default in the create form is "anthropic"; "ollama" is the
 // keyless local-server format (base URL defaults to http://127.0.0.1:11434/v1).
-type ProfileFormat = "anthropic" | "openai" | "openai-responses" | "ollama";
+type ProfileFormat = "anthropic" | "openai" | "openai-responses" | "ollama" | "openai-keyless";
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
 const EFFORT_LEVELS: { value: string; label: string }[] = [
   { value: NONE, label: "Not sent (default)" },
+  { value: "no-reasoning", label: "none" },
   { value: "low", label: "low" },
   { value: "medium", label: "medium" },
   { value: "high", label: "high" },
@@ -82,7 +84,7 @@ function cooldownText(secs: number) {
 // records (with polling off no new records appear, so "healthy" = no known failure).
 type Health = { label: string; cls: string; hint?: string };
 function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
-  if (!p.api_key_hint && p.format !== "ollama") {
+  if (!p.api_key_hint && p.format !== "ollama" && p.format !== "openai-keyless") {
     return {
       label: "No Key configured",
       cls: "border-muted-foreground/40 text-muted-foreground",
@@ -222,7 +224,7 @@ function PoolSheet({
                 </div>
                 {inChain.length < 2 && (
                   <p className="text-muted-foreground text-xs">
-                    Only {inChain.length} usable profile(s) right now, so the pool has no effect — at least 2 usable profiles (API Key set, or Ollama) with pool participation are
+                    Only {inChain.length} usable profile(s) right now, so the pool has no effect — at least 2 usable profiles with pool participation are
                     required.
                   </p>
                 )}
@@ -350,7 +352,7 @@ function ProfileSheet({
     if (!open) return;
     setName(profile?.name ?? "");
     setFormat(
-      profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "ollama"
+      profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "ollama" || profile?.format === "openai-keyless"
         ? profile.format
         : "anthropic",
     );
@@ -361,7 +363,7 @@ function ProfileSheet({
     setRpm(String(profile?.rate_per_minute ?? 0));
     setCw(String(profile?.context_window_k ?? 0));
     setThinkingType(fromStore(profile?.thinking_type));
-    setEffort(fromStore(profile?.reasoning_effort));
+    setEffort(profile?.reasoning_effort === "none" ? "no-reasoning" : fromStore(profile?.reasoning_effort));
     setPriority(String(profile?.priority ?? 0));
     setPoolExclude(profile?.pool_exclude ?? false);
     setStreaming(profile?.streaming ?? true);
@@ -411,7 +413,7 @@ function ProfileSheet({
         apiKey,
         proxy,
         toStore(thinkingType),
-        toStore(effort),
+        effort === "no-reasoning" ? "none" : toStore(effort),
         profileId,
         streaming,
         sessionHeaderKey.trim(),
@@ -435,6 +437,10 @@ function ProfileSheet({
       toast.error("Please fill in a name and a model");
       return;
     }
+    if (format === "openai-keyless" && !baseUrl.trim()) {
+      toast.error("Enter the base URL for the keyless endpoint");
+      return;
+    }
     if (saving) return;
     setSaving(true);
     try {
@@ -450,7 +456,7 @@ function ProfileSheet({
         rate_per_minute: Number(rpm) || 0,
         context_window_k: Number(cw) || 0,
         thinking_type: toStore(thinkingType),
-        reasoning_effort: toStore(effort),
+        reasoning_effort: effort === "no-reasoning" ? "none" : toStore(effort),
         priority: Number(priority) || 0,
         pool_exclude: poolExclude,
         streaming,
@@ -522,6 +528,7 @@ function ProfileSheet({
                 <SelectContent>
                   <SelectItem value="anthropic">Anthropic</SelectItem>
                   <SelectItem value="openai">OpenAI (Chat Completions)</SelectItem>
+                  <SelectItem value="openai-keyless">OpenAI-compatible (no API key)</SelectItem>
                   <SelectItem value="openai-responses">OpenAI (Responses API)</SelectItem>
                   <SelectItem value="ollama">Ollama (local, no key needed)</SelectItem>
                 </SelectContent>
@@ -577,11 +584,12 @@ function ProfileSheet({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-base-url">Base URL (optional)</Label>
+            <Label htmlFor="p-base-url">Base URL {format === "openai-keyless" ? "(required)" : "(optional)"}</Label>
             <Input
               id="p-base-url"
               className="font-mono"
               placeholder={format === "ollama" ? OLLAMA_DEFAULT_BASE_URL : "https://api.openai.com/v1"}
+              required={format === "openai-keyless"}
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
@@ -633,7 +641,7 @@ function ProfileSheet({
             </p>
           </div>
 
-          <div className="grid gap-2">
+          {format !== "openai-keyless" && <div className="grid gap-2">
             <Label htmlFor="p-api-key">
               {format === "ollama" ? "API Key (optional for Ollama)" : "API Key"}
             </Label>
@@ -644,7 +652,7 @@ function ProfileSheet({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
-          </div>
+          </div>}
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="grid gap-2">

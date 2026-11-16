@@ -1,0 +1,22 @@
+flush ruleset
+table inet artex_gateway {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iifname "lo" accept
+    iifname "enp0s3" ip saddr 10.0.2.2 tcp dport 22 ct state { new, established } accept
+    iifname "enp0s3" ip saddr @UPSTREAM_IP@ tcp sport 443 ct state established accept
+    iifname "enp0s3" udp sport 67 udp dport 68 accept
+    iifname "enp0s8" ip saddr 192.0.2.2 tcp dport 8080 ct state { new, established } accept
+    iifname "enp0s8" ip saddr 192.0.2.2 tcp sport 22 ct state established accept
+  }
+  chain output {
+    type filter hook output priority filter; policy drop;
+    oifname "lo" accept
+    oifname "enp0s3" ip daddr 10.0.2.2 tcp sport 22 ct state established accept
+    oifname "enp0s3" ip daddr @UPSTREAM_IP@ tcp dport 443 ct state { new, established } accept
+    oifname "enp0s3" udp sport 68 udp dport 67 accept
+    oifname "enp0s8" ip daddr 192.0.2.2 tcp sport 8080 ct state established accept
+    oifname "enp0s8" ip daddr 192.0.2.2 tcp dport 22 ct state { new, established } accept
+  }
+  chain forward { type filter hook forward priority filter; policy drop; }
+}

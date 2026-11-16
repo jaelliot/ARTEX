@@ -346,7 +346,10 @@ func unmaskToolExec(storedKind string, stored json.RawMessage, kind string, in j
 
 func timeoutOr(ms, def int) time.Duration {
 	if ms <= 0 {
-		return time.Duration(def) * time.Millisecond
+		ms = def
+	}
+	if ms > 600000 {
+		ms = 600000
 	}
 	return time.Duration(ms) * time.Millisecond
 }
@@ -489,6 +492,24 @@ func (s *Server) runScriptTool(ctx context.Context, key string, execRaw json.Raw
 	return actool.Text(actool.Capture(tc, body)), nil
 }
 
+const maxScriptOutput = 1 << 20
+
+type scriptOutput struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (w *scriptOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := maxScriptOutput - w.buf.Len()
+	if len(p) > remaining {
+		p = p[:remaining]
+		w.truncated = true
+	}
+	_, _ = w.buf.Write(p)
+	return n, nil
+}
+
 // execPython writes the code to a temp .py under workDir/.tools, runs it via interp
 // with the params JSON on stdin + scalar params mirrored to TOOL_<NAME> env, and
 // returns combined stdout+stderr (with a timeout/exit note). Standalone + testable.
@@ -512,6 +533,8 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	c := exec.CommandContext(runCtx, interp, tmp)
+	configureScriptProcess(c)
+	c.WaitDelay = 2 * time.Second
 	c.Dir = workDir
 	c.Env = append(os.Environ(), sessionEnv...) // session proxy env
 	for k, v := range params {                  // scalar params mirrored as TOOL_<NAME>
@@ -521,8 +544,13 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 	}
 	pj, _ := json.Marshal(params)
 	c.Stdin = bytes.NewReader(pj) // parameter JSON goes via stdin
-	out, err := c.CombinedOutput()
-	body := string(out)
+	var out scriptOutput
+	c.Stdout, c.Stderr = &out, &out
+	err = c.Run()
+	body := out.buf.String()
+	if out.truncated {
+		body += "\n... [script output truncated] ..."
+	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		body += "\n... [terminated on timeout] ..."
 	} else if err != nil {
