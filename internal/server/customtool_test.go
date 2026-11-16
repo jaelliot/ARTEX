@@ -152,6 +152,46 @@ func TestCustomToolTimeoutBound(t *testing.T) {
 	}
 }
 
+func TestExecPythonParentExitStopsChild(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group cleanup is implemented on Linux")
+	}
+	interp, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	for _, redirect := range []bool{false, true} {
+		name := "inherited-pipes"
+		if redirect {
+			name = "closed-pipes"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			code := `import os,subprocess,sys,time,pathlib
+kwargs = {}
+if os.environ.get("TOOL_REDIRECT") == "true":
+    kwargs = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+subprocess.Popen([sys.executable, "-c", "import time; open('child-started', 'w').close(); time.sleep(3); open('child-ran', 'w').close()"], **kwargs)
+deadline = time.monotonic() + 2
+while not pathlib.Path('child-started').exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+`
+			out, err := execPython(context.Background(), interp, "test", code,
+				map[string]any{"redirect": redirect}, dir, nil, 10*time.Second)
+			if err != nil || strings.Contains(out, "[exit:") {
+				t.Fatalf("script failed: %q %v", out, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "child-started")); err != nil {
+				t.Fatalf("child did not start before parent exited: %v", err)
+			}
+			time.Sleep(3250 * time.Millisecond)
+			if _, err := os.Stat(filepath.Join(dir, "child-ran")); !os.IsNotExist(err) {
+				t.Fatalf("child survived parent exit: %v", err)
+			}
+		})
+	}
+}
+
 // TestRunHTTPTool functionally exercises the http executor against a local server:
 // method/url/header/body templates are rendered from params, the request is sent,
 // and the response status+body are returned. No recording proxy → s.m untouched.

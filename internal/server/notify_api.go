@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/internal/db"
 	"github.com/Autumn-27/artex/internal/notify"
+	"github.com/Autumn-27/artex/internal/worker"
 )
 
 // This file is the HTTP API for the notification delivery feature. All routes are
@@ -419,6 +420,10 @@ func (s *Server) notifyDeleteChannel(w http.ResponseWriter, r *http.Request) {
 // endpoint is therefore **synchronous**, with the timeout bounded by the notify
 // package's HTTP client (15 seconds).
 func (s *Server) notifyTestChannel(w http.ResponseWriter, r *http.Request) {
+	if _, offline := worker.SocketPath(); offline {
+		writeErr(w, http.StatusForbidden, "notifications are unavailable in offline worker mode")
+		return
+	}
 	pg := s.pg(w)
 	if pg == nil {
 		return

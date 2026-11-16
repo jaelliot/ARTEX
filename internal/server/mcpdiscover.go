@@ -8,6 +8,7 @@ import (
 
 	"github.com/Autumn-27/artex/internal/db"
 	"github.com/Autumn-27/artex/internal/mcphttp"
+	"github.com/Autumn-27/artex/internal/worker"
 	"github.com/Autumn-27/norma/mcp"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -22,6 +23,9 @@ type mcpClient interface {
 
 // connectMCP dials one MCP server per its transport. Callers must Close the client.
 func connectMCP(ctx context.Context, m *db.MCPServer) (mcpClient, error) {
+	if _, offline := worker.SocketPath(); offline {
+		return nil, fmt.Errorf("MCP servers are unavailable in offline worker mode")
+	}
 	switch m.Transport {
 	case "stdio":
 		if m.Command == "" {

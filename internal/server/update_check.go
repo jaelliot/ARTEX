@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Autumn-27/artex/internal/worker"
 )
 
 // The update check is opt-in: only ARTEX_UPDATE_CHECK=1 (or true/on/yes) lets
@@ -41,7 +43,7 @@ var updates = &updateCheck{enabled: updateCheckEnabled(), fetch: fetchLatestRele
 // newerVersion returns the latest release tag when it is newer than current,
 // fetching it at most once per updateCheckInterval; "" otherwise.
 func (u *updateCheck) newerVersion(ctx context.Context, now time.Time, current string) string {
-	if !u.enabled {
+	if _, offline := worker.SocketPath(); !u.enabled || offline {
 		return ""
 	}
 	u.mu.Lock()
