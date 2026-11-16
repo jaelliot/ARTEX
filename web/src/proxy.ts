@@ -8,16 +8,17 @@ export function proxy(request: NextRequest) {
   if (process.env.NEXT_PUBLIC_MOCK === "1") return NextResponse.next();
 
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get("artex_token")?.value;
+  // This hint controls redirects only; the backend validates the bearer token.
+  const hasSessionHint = request.cookies.get("artex_session")?.value === "1";
   const isAuthPage = AUTH_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   // Not logged in → redirect to the login page
-  if (!token && !isAuthPage) {
+  if (!hasSessionHint && !isAuthPage) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
   // Logged in while visiting the login/setup pages → redirect to the main UI
-  if (token && isAuthPage) {
+  if (hasSessionHint && isAuthPage) {
     return NextResponse.redirect(new URL("/function/tasks", request.url));
   }
 

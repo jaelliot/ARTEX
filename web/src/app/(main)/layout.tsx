@@ -37,9 +37,8 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
     if (auth.getToken()) {
       setAuthed(true);
     } else {
-      // When the client-side guard sees a logged-out state, the cookie must be cleared too: otherwise proxy.ts, going
-      // by "cookie exists" alone, would bounce us from /login back to the main UI and ping-pong with this guard
-      // in an infinite redirect → blank screen (triggered when cookie and localStorage disagree).
+      // Clear the redirect hint too, so the proxy cannot bounce a logged-out
+      // browser from /login back to this guard.
       auth.clearToken();
       window.location.href = "/login";
     }

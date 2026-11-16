@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -9,6 +10,39 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestSessionHintDoesNotAuthenticateAPI(t *testing.T) {
+	key := []byte("test-signing-key-for-session-hint")
+	token, err := signJWT(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := (&Server{jwtKey: key}).requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		name   string
+		bearer string
+		want   int
+	}{
+		{name: "hint alone", want: http.StatusUnauthorized},
+		{name: "hint and invalid bearer", bearer: "invalid", want: http.StatusUnauthorized},
+		{name: "hint and valid bearer", bearer: token, want: http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+			req.AddCookie(&http.Cookie{Name: "artex_session", Value: "1"})
+			if tc.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.bearer)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
 
 // jwtKeyDirs returns fresh key, data and legacy base dirs and points
 // jwtLegacyBaseDir at the latter for the duration of the test. keyDir does not

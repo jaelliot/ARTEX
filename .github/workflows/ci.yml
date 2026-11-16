@@ -110,4 +110,5 @@ jobs:
           node --test tests/capture.test.cjs
       - run: npx tsc --noEmit
       - run: npm run test:polling
+      - run: npm run test:auth
       - run: npm run build:static
