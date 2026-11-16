@@ -130,7 +130,7 @@ if [[ -z "$NEWPASS" ]]; then
   [[ "$NEWPASS" == "$NEWPASS2" ]] || die "the two entries do not match"
 fi
 [[ -n "$NEWPASS" ]] || die "password cannot be empty"
-# Same minimum as the server (minPasswordRunes in server/auth.go), counted in
+# Same minimum as the server (minPasswordRunes in internal/server/auth.go), counted in
 # characters like the server: UTF-8 bytes minus continuation bytes, whatever the locale.
 NEWPASS_CHARS=$(printf '%s' "$NEWPASS" | LC_ALL=C tr -d '\200-\277' | wc -c)
 (( NEWPASS_CHARS >= 12 )) || die "password must be at least 12 characters"

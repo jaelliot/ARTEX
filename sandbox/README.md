@@ -14,6 +14,9 @@ uses NAT for SSH and connectivity. NAT is not an air gap and can reach external
 networks and the host. It requests that VirtualBox disable NAT access to host
 loopback, but the reverse-engineering lab observed VirtualBox 7.2.14 fail to
 retain that setting. A requested setting is not evidence it is enforced.
+On this host, an ARTEX VM booted with `LocalhostReachable: 0`, but the saved
+configuration omitted the restriction and VirtualBox reported `1` after
+shutdown. The VM has not passed the persistence check.
 
 Before an autonomous run, use an independently enforced network boundary that
 limits egress to the authorized target and model endpoint and blocks access to
@@ -35,18 +38,24 @@ From this directory, create the dedicated VM:
 
 ```sh
 vagrant up --provider=virtualbox
+python3 verify.py
 ```
 
-There is no shared checkout. After verifying isolation, stage a source snapshot
-from the repository root. The command transfers tracked files as they currently
-exist in the working tree, including modifications, and the two newly separated
-server files if they are not yet tracked. It excludes other untracked files,
-Git metadata, and ignored runtime data. Review the file list for secrets before
-transfer. The destination must not already exist; use a fresh VM for a new
-snapshot.
+The verifier checks the running VM and its saved VirtualBox settings. It fails
+closed when a setting is missing or unsafe, including the NAT persistence issue.
+A successful result is only a settings check: it does not establish target/model
+egress restrictions or host-network isolation. Verify those independently before
+staging anything. Run the settings and network checks again after every restart
+or snapshot restore.
+
+There is no shared checkout. After verifying isolation, stage a committed source
+snapshot from the repository root. This transfers the files in `HEAD`, excluding
+uncommitted changes, Git metadata, and ignored runtime data. Review the committed
+contents for secrets before transfer. The destination must not already exist; use
+a fresh VM for a new snapshot.
 
 ```sh
-{ git ls-files -z; for f in server/routes.go server/traffic_handlers.go; do git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || printf '%s\0' "$f"; done; } | tar --null -T - -cf - | (cd sandbox && vagrant ssh -c 'umask 077; mkdir ~/artex-src && tar -xf - -C ~/artex-src')
+git archive HEAD | (cd sandbox && vagrant ssh -c 'umask 077; mkdir ~/artex-src && tar -xf - -C ~/artex-src')
 ```
 
 Within the guest, configure secrets for this disposable environment and build

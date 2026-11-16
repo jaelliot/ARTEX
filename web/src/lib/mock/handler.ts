@@ -488,7 +488,7 @@ function mockFindingMatchesQuery(finding: (typeof mockFindings)[number], query: 
 }
 
 // ── "By asset" view ────────────────────────────────────────────────────────────
-// The backend builds the tree in db/finding_assets.go (only assets with findings + ancestors filled in level by level; counts are
+// The backend builds the tree in internal/db/finding_assets.go (only assets with findings + ancestors filled in level by level; counts are
 // deduplicated and accumulated along ancestor chains). Here the same parent-child priority is replayed in memory so the demo's hierarchy,
 // counts, and subtree filtering match the real backend.
 
@@ -591,7 +591,7 @@ function mockBuildAssetTree(list: (typeof mockFindings)[number][]): MockAssetTre
     });
   }
 
-  // Parent-child relation: same priority order as firstOf in db/finding_assets.go.
+  // Parent-child relation: same priority order as firstOf in internal/db/finding_assets.go.
   const find = (predicate: (a: (typeof mockAssets)[number]) => boolean) => {
     const asset = [...picked.values()].find(predicate);
     return asset ? key(asset.id) : "";
@@ -815,7 +815,7 @@ function mockProfileResolution(profileID: number | undefined, source: TaskLLMRes
   };
 }
 
-// Mirrors the backend precedence in server/task_resolution.go:
+// Mirrors the backend precedence in internal/server/task_resolution.go:
 // Agent binding → task LLM configuration chain → global configuration → environment configuration.
 function mockRoleResolution(task: Task, agentKey: "mainagent" | "planner" | "worker"): TaskLLMResolution {
   const agent = D.agents.find((item) => item.key === agentKey);

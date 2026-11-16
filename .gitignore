@@ -43,7 +43,7 @@ Thumbs.db
 /artex.old
 /artex.failed
 /artex.upgrade.json
-/server/webui/dist/
+/internal/server/webui/dist/
 /dist/
 
 # JWT signing key (generated at runtime, stored in the project root, never committed)

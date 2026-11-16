@@ -5,7 +5,7 @@ SET statement_timeout = '10min';
 SET maintenance_work_mem = '128MB';
 SET max_parallel_maintenance_workers = 1;
 
--- db/commands.go joins by tool_use_id without an exploration_id constraint.
+-- internal/db/commands.go joins by tool_use_id without an exploration_id constraint.
 -- The existing (exploration_id, tool_use_id, id) index has the wrong leading key.
 CREATE INDEX CONCURRENTLY idx_activity_tool_result_lookup
     ON public.activity (tool_use_id) INCLUDE (is_error)

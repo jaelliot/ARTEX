@@ -30,7 +30,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # Reuse the frontend built above; build.sh skips its own frontend step.
-COPY --from=web /src/web/out ./server/webui/dist
+COPY --from=web /src/web/out ./internal/server/webui/dist
 ARG ARTEX_VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH

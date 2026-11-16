@@ -15,7 +15,7 @@
 #   ARTEX_PACKAGE_DIR=dist            Directory for release archives.
 #   ARTEX_COMPRESS=off                UPX mode: off, auto, or required.
 #   ARTEX_UPX_ARGS="--best --lzma"    Arguments passed to UPX.
-#   ARTEX_SKIP_FRONTEND=1             Reuse server/webui/dist (for CI artifact builds).
+#   ARTEX_SKIP_FRONTEND=1             Reuse internal/server/webui/dist (for CI artifact builds).
 #   ARTEX_SKIP_NPM_CI=1               Skip npm ci while rebuilding the frontend.
 #   ARTEX_GOSUMDB=sum.golang.org      Go checksum database.
 set -euo pipefail
@@ -112,7 +112,7 @@ else
 fi
 
 if [ "${ARTEX_SKIP_FRONTEND:-0}" = "1" ]; then
-  [ -d server/webui/dist ] || die "ARTEX_SKIP_FRONTEND=1 but server/webui/dist does not exist"
+  [ -d internal/server/webui/dist ] || die "ARTEX_SKIP_FRONTEND=1 but internal/server/webui/dist does not exist"
 else
   command -v npm >/dev/null 2>&1 || die "npm not detected (building the frontend static assets requires Node.js/npm)"
   command -v rsync >/dev/null 2>&1 || die "rsync not detected"
@@ -121,9 +121,9 @@ else
     (cd web && npm ci)
   fi
   (cd web && npm run build:static)
-  info "Syncing frontend assets to server/webui/dist"
-  mkdir -p server/webui/dist
-  rsync -a --delete web/out/ server/webui/dist/
+  info "Syncing frontend assets to internal/server/webui/dist"
+  mkdir -p internal/server/webui/dist
+  rsync -a --delete web/out/ internal/server/webui/dist/
 fi
 
 compress_binary() {

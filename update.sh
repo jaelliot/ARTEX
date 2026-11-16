@@ -57,7 +57,8 @@ update_local(){
   if command -v npm >/dev/null 2>&1; then
     info "Rebuilding frontend static assets…"
     ( cd web && npm ci && npm run build:static )
-    rm -rf server/webui/dist && cp -r web/out server/webui/dist
+    mkdir -p internal/server/webui
+    rm -rf internal/server/webui/dist && cp -r web/out internal/server/webui/dist
     info "Recompiling the embedded single binary…"
     CGO_ENABLED=0 go build -tags embedui -trimpath -o artex ./cmd/artex
   else

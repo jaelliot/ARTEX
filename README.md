@@ -66,9 +66,9 @@ docker compose logs artex | grep "Setup token"
 
 ## Repository map
 
-- `cmd/artex/` starts the Go application; `server/` owns HTTP routes and handlers.
-- `agent/`, `guard/`, and `intercept/` implement agent execution and approval controls.
-- `db/`, `traffic/`, `evidence/`, and `report/` store and present test results.
+- `cmd/artex/` starts the Go application; `internal/server/` owns HTTP routes and handlers.
+- `internal/agent/`, `internal/guard/`, and `internal/intercept/` implement agent execution and approval controls.
+- `internal/db/`, `internal/traffic/`, `internal/evidence/`, and `internal/report/` store and present test results.
 - `web/` contains the frontend; `extension/` contains the browser traffic capture extension.
 - `skills/` contains agent instructions; `scripts/poc/` contains exploit proofs and labs.
 - `sandbox/` contains the separate Vagrant VM configuration and its security limits.
@@ -355,7 +355,9 @@ gh attestation verify <zip> --repo BaaRai/ARTEX   # built by this repository's r
 
 ```bash
 cd web && npm ci && npm run build:static && cd ..
-cp -r web/out server/webui/dist
+mkdir -p internal/server/webui
+rm -rf internal/server/webui/dist
+cp -r web/out internal/server/webui/dist
 CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 ./start.sh
 ```
@@ -541,7 +543,7 @@ Daily cron example (03:20, operator crontab):
 > Upgrading swaps the program and never touches data: the Postgres volume `pgdata`, `./data`
 > (traffic index, task files, transcripts), `./keys` (`jwt.key`, `secret.key`) and `./skills` are
 > preserved. **No manual database step is needed**: on every start ARTEX applies its embedded
-> `schema.sql` baseline, then any pending numbered migration from `db/migrations/`, in order, each
+> `schema.sql` baseline, then any pending numbered migration from `internal/db/migrations/`, in order, each
 > in its own transaction. Restarting the new binary is the upgrade. Back up `./data`, `keys/` and
 > the database before upgrading.
 
@@ -602,7 +604,9 @@ cp -r <extracted dir>/skills ./ && cp <extracted dir>/artex ./
 ```bash
 git pull
 cd web && npm ci && npm run build:static && cd ..
-cp -r web/out server/webui/dist
+mkdir -p internal/server/webui
+rm -rf internal/server/webui/dist
+cp -r web/out internal/server/webui/dist
 CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 # restart ./start.sh
 ```

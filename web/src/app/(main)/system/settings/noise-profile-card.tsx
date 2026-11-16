@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "@/lib/api";
 import type { NoiseProfileName, NoiseStatus } from "@/lib/types";
 
-// Mirrors egress.Profiles in egress/egress.go; the jitter of one send is
+// Mirrors egress.Profiles in internal/egress/egress.go; the jitter of one send is
 // min(Jitter/RPS, 250 ms).
 const profiles: { value: NoiseProfileName; label: string; limits: string }[] = [
   { value: "off", label: "Off", limits: "Off: requests and their timing are unchanged, and nothing is counted." },

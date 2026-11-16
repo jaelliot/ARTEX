@@ -643,7 +643,7 @@ function serverColumnCount() {
 
 type Selection = { selected: Set<number>; toggle: (id: number) => void; toggleAll: () => void };
 
-// Server limit on ids per batch-decide call (maxBatchDecide in server/intercept.go).
+// Server limit on ids per batch-decide call (maxBatchDecide in internal/server/intercept.go).
 const batchDecideMax = 100;
 
 function ApprovalTable({
@@ -943,7 +943,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   };
 
   // Each id is decided by the server exactly like a single decision. The server
-  // takes at most 100 ids per call (maxBatchDecide in server/intercept.go) and
+  // takes at most 100 ids per call (maxBatchDecide in internal/server/intercept.go) and
   // the pending queue is not paginated, so the selection goes out in sequential
   // chunks of at most batchDecideMax ids. If a chunk cannot be sent (network
   // error, 400), sending stops: its ids and the later ones stay selected with
