@@ -26,6 +26,7 @@ import (
 	"github.com/Autumn-27/artex/internal/llmpool"
 	"github.com/Autumn-27/artex/internal/llmrec"
 	"github.com/Autumn-27/artex/internal/report"
+	"github.com/Autumn-27/artex/internal/worker"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
@@ -243,11 +244,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			log.Printf("[retester] seed: %v", err)
 		}
 		go s.evidenceStore().RunGC(s.ctx)
-		s.seedPythonInterpreter()     // custom script tool: detect the python interpreter at boot and store it (only when empty)
-		go newScheduler(s).Run(s.ctx) // P3 trigger scheduling (scheduled/finding/goal events), custom agents only
-		// Vulnerability IM push delivery engine. Sits beside the Scheduler but independent: push latency demands (3s)
-		// differ from the triggers' business cadence, and neither's failures drag the other down — a stuck push must not affect agent triggers.
-		go newNotifier(s).Run(s.ctx)
+		s.seedPythonInterpreter() // custom script tool: detect the python interpreter at boot and store it (only when empty)
+		if _, offline := worker.SocketPath(); !offline {
+			go newScheduler(s).Run(s.ctx)
+			go newNotifier(s).Run(s.ctx)
+		}
 		logSink.SetDB(ctx, m.pg) // restore last 100 log rows and enable async persistence
 	}
 	// precedence: persisted DB config > env.

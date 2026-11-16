@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,12 +72,16 @@ func TestKeylessOpenAIConnectionTestBoundsOutput(t *testing.T) {
 	var maxTokens int
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			MaxTokens int `json:"max_tokens"`
+			MaxTokens int               `json:"max_tokens"`
+			Tools     []json.RawMessage `json:"tools"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
 		maxTokens = body.MaxTokens
+		if len(body.Tools) != 0 {
+			t.Errorf("connection test exposed %d tools", len(body.Tools))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"1","object":"chat.completion","model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
 	}))
@@ -88,6 +94,39 @@ func TestKeylessOpenAIConnectionTestBoundsOutput(t *testing.T) {
 	}
 	if maxTokens != 128 {
 		t.Fatalf("max_tokens=%d, want 128", maxTokens)
+	}
+}
+
+func TestConnectionTestDoesNotExecuteModelToolCalls(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "unexpected-tool-execution")
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Tools []json.RawMessage `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Tools) != 0 {
+			t.Errorf("connection test exposed %d tools", len(body.Tools))
+		}
+		args, _ := json.Marshal(map[string]string{"command": "touch " + marker})
+		response := map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test-model",
+			"choices": []any{map[string]any{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{
+					"id": "call1", "type": "function", "function": map[string]string{"name": "Bash", "arguments": string(args)},
+				}},
+			}, "finish_reason": "tool_calls"}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer fake.Close()
+	cfg := agent.ConfigFrom("openai-keyless", "test-model", fake.URL+"/v1", "", "")
+	cfg.Stream = false
+	_, _, _ = agent.TestConnection(context.Background(), cfg)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("model tool call executed during connection test: %v", err)
 	}
 }
 

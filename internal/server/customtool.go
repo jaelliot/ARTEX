@@ -22,6 +22,7 @@ import (
 	"github.com/Autumn-27/artex/internal/guard"
 	"github.com/Autumn-27/artex/internal/intercept"
 	"github.com/Autumn-27/artex/internal/notify"
+	"github.com/Autumn-27/artex/internal/worker"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -443,6 +444,9 @@ func ensureSchema(raw json.RawMessage) map[string]any {
 // ---------- command: render the command → reuse the Bash low-level run ----------
 
 func (s *Server) runCommandTool(ctx context.Context, key string, execRaw json.RawMessage, params map[string]any, tc *actool.ToolContext) (actool.Result, error) {
+	if _, offline := worker.SocketPath(); offline {
+		return actool.Errorf("custom tools are unavailable in offline worker mode"), nil
+	}
 	var spec commandExec
 	_ = json.Unmarshal(execRaw, &spec)
 	if strings.TrimSpace(spec.Command) == "" {
@@ -468,6 +472,9 @@ func (s *Server) runCommandTool(ctx context.Context, key string, execRaw json.Ra
 // ---------- script (Python only): temp file + stdin JSON + env ----------
 
 func (s *Server) runScriptTool(ctx context.Context, key string, execRaw json.RawMessage, params map[string]any, tc *actool.ToolContext) (actool.Result, error) {
+	if _, offline := worker.SocketPath(); offline {
+		return actool.Errorf("custom tools are unavailable in offline worker mode"), nil
+	}
 	var spec scriptExec
 	_ = json.Unmarshal(execRaw, &spec)
 	if strings.TrimSpace(spec.Code) == "" {
@@ -533,7 +540,6 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	c := exec.CommandContext(runCtx, interp, tmp)
-	configureScriptProcess(c)
 	c.WaitDelay = 2 * time.Second
 	c.Dir = workDir
 	c.Env = append(os.Environ(), sessionEnv...) // session proxy env
@@ -546,7 +552,7 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 	c.Stdin = bytes.NewReader(pj) // parameter JSON goes via stdin
 	var out scriptOutput
 	c.Stdout, c.Stderr = &out, &out
-	err = c.Run()
+	err = runScriptProcess(c)
 	body := out.buf.String()
 	if out.truncated {
 		body += "\n... [script output truncated] ..."
@@ -562,6 +568,9 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 // ---------- http: native request + proxy ----------
 
 func (s *Server) runHTTPTool(ctx context.Context, key string, execRaw json.RawMessage, params map[string]any, tc *actool.ToolContext) (actool.Result, error) {
+	if _, offline := worker.SocketPath(); offline {
+		return actool.Errorf("custom tools are unavailable in offline worker mode"), nil
+	}
 	var spec httpExec
 	_ = json.Unmarshal(execRaw, &spec)
 	method := strings.ToUpper(strings.TrimSpace(spec.Method))

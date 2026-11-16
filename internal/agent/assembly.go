@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/Autumn-27/artex/internal/worker"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -65,7 +66,8 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 		out     = base
 	)
 	// Copy each hook once under its lock, then call it outside the lock.
-	if augment := ToolAugment(); augment != nil {
+	_, offline := worker.SocketPath()
+	if augment := ToolAugment(); augment != nil && !offline {
 		var extra []actool.CoreTool
 		var cl func()
 		extra, def, cl = augment(ctx, agentKey)

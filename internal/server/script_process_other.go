@@ -4,4 +4,4 @@ package server
 
 import "os/exec"
 
-func configureScriptProcess(_ *exec.Cmd) {}
+func runScriptProcess(c *exec.Cmd) error { return c.Run() }

@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Manual worker prototype. ARTEX does not dispatch its tools here yet.
+# Worker prototype for manual use and experimental broker dispatch.
 image=${ARTEX_OFFLINE_WORKER_IMAGE:-golang:1.25.8-bookworm}
-name="artex-offline-worker-$(date +%s)-$$"
+name="artex-offline-worker-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 created=0
 cleanup() {
   if (( created )); then timeout 15 docker rm -f "$name" >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
-volumes=$(timeout 15 docker image inspect -f '{{len .Config.Volumes}}' "$image")
+image_id=$(timeout 15 docker image inspect -f '{{.Id}}' "$image")
+volumes=$(timeout 15 docker image inspect -f '{{len .Config.Volumes}}' "$image_id")
 if [[ $volumes != 0 ]]; then
   echo "Worker image must not declare writable volumes" >&2
   exit 1
 fi
+if timeout 15 docker inspect "$name" >/dev/null 2>&1; then
+  echo "Worker container name already exists" >&2
+  exit 1
+fi
+created=1
 
 timeout 30 docker create --pull never --name "$name" -i --network none --read-only \
   --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
@@ -23,9 +31,8 @@ timeout 30 docker create --pull never --name "$name" -i --network none --read-on
   --ulimit nofile=256:256 --ulimit fsize=67108864:67108864 --ulimit core=0:0 --log-driver none \
   --tmpfs /work:rw,nosuid,nodev,noexec,size=128m,uid=65534,gid=65534,mode=700 \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,uid=65534,gid=65534,mode=700 \
-  --workdir /work --entrypoint /usr/bin/env "$image" -i \
-  PATH=/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp /bin/sh -s >/dev/null
-created=1
+  --workdir /work --entrypoint /usr/bin/env "$image_id" -i \
+  PATH=/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp /bin/bash -s >/dev/null
 
 set +e
 timeout 120 docker start -a -i "$name" 2>&1 | head -c 1048576

@@ -111,12 +111,24 @@ and networks are removed when the scripts finish. These checks do not run ARTEX
 or prove that its tools are separated from its server. They do not enforce a
 quota on persistent database or application volumes.
 
-`./offline-worker` is a manual prototype that accepts a shell script on standard
+`./offline-worker` is a manual prototype that accepts a Bash script on standard
 input and runs it in a fresh, networkless, resource-limited container with no
 host mounts. Its workspace disappears when it exits. The cached default image
-contains basic shell tools but not ARTEX's full scanner collection. ARTEX does
-not dispatch tools to this worker yet; running the prototype does not make the
-server's own tools safe to use.
+contains basic shell tools but not ARTEX's full scanner collection. Running the
+prototype alone does not make the server's own tools safe to use.
+
+`worker_broker.py` and `internal/worker` are an experimental local interface for
+that prototype. Setting `ARTEX_OFFLINE_WORKER_SOCKET` selects an experimental
+mode that routes model-invoked Bash through the broker and disables other agent,
+custom, and MCP tools. Each call has a fresh workspace, so files do not persist
+between calls. The broker is not installed or deployed by these instructions,
+and this mode has not been verified end to end with the full ARTEX image. Keep
+using only the connection test until deployment and all execution paths have
+been independently verified.
+Before deployment, the broker and worker launcher must be installed in a
+trusted location that the ARTEX server cannot modify, and the socket's identity
+and access must be verified. Container cleanup after broker or Docker failure
+also needs verification.
 
 Use `./stop` from `sandbox/` to halt ARTEX first and then the gateway. A
 Vagrant-managed gateway restart leaves its internal cable disconnected until
