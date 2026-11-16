@@ -1,0 +1,28 @@
+# Dedicated ARTEX VM. The guest receives no host folders or SSH agent.
+Vagrant.configure("2") do |config|
+  # The reverse-engineering lab's local box includes Docker. Override only with
+  # a trusted, locally prepared VirtualBox box.
+  config.vm.box = ENV.fetch("ARTEX_VM_BOX", "linux-re-v0")
+  config.vm.box_check_update = false
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.ssh.forward_agent = false
+  config.ssh.forward_x11 = false
+  config.ssh.insert_key = true
+  config.vm.network "forwarded_port", guest: 22, host: 2222,
+    host_ip: "127.0.0.1", id: "ssh", auto_correct: true
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.name = "artex-sandbox"
+    vb.memory = 8192
+    vb.cpus = 4
+    vb.gui = false
+    vb.customize ["modifyvm", :id,
+      "--nic1", "nat", "--nat-localhostreachable1", "off",
+      "--nic2", "none", "--nic3", "none", "--nic4", "none",
+      "--nic5", "none", "--nic6", "none", "--nic7", "none", "--nic8", "none",
+      "--vrde", "off", "--clipboard-mode", "disabled",
+      "--clipboard-file-transfers", "disabled", "--drag-and-drop", "disabled",
+      "--usb-ohci", "off", "--usb-ehci", "off", "--usb-xhci", "off",
+      "--audio-enabled", "off", "--accelerate-3d", "off"]
+  end
+end

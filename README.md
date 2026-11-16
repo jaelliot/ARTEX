@@ -43,6 +43,10 @@ justify it, and every autonomous action passes through scope rules, approval gat
 
 ## Quick start
 
+ARTEX runs commands and security tools. For a separate VM workflow, see
+[Vagrant sandbox](sandbox/README.md). Its network boundary must be verified
+before use; the VM configuration alone does not make a run isolated.
+
 ```bash
 git clone https://github.com/BaaRai/ARTEX.git
 cd ARTEX
@@ -59,6 +63,15 @@ docker compose logs artex | grep "Setup token"
 
 > There is no prebuilt Docker image to pull: the image is always built from your checkout.
 > For all installation paths (script, binaries, source, release archives), see [Installation](#installation).
+
+## Repository map
+
+- `cmd/artex/` starts the Go application; `server/` owns HTTP routes and handlers.
+- `agent/`, `guard/`, and `intercept/` implement agent execution and approval controls.
+- `db/`, `traffic/`, `evidence/`, and `report/` store and present test results.
+- `web/` contains the frontend; `extension/` contains the browser traffic capture extension.
+- `skills/` contains agent instructions; `scripts/poc/` contains exploit proofs and labs.
+- `sandbox/` contains the separate Vagrant VM configuration and its security limits.
 
 ---
 
