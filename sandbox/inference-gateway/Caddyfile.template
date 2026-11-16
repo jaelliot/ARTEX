@@ -1,0 +1,35 @@
+{
+  admin off
+  auto_https off
+}
+(inference_upstream) {
+  reverse_proxy https://@UPSTREAM_HOST@ {
+    header_up Host @UPSTREAM_HOST@
+    transport http {
+      tls_server_name @UPSTREAM_HOST@
+      dial_timeout 5s
+      response_header_timeout 120s
+    }
+  }
+}
+http://192.0.2.1:8080 {
+  bind 192.0.2.1
+  @models {
+    method GET
+    path /v1/models
+  }
+  @chat {
+    method POST
+    path /v1/chat/completions
+  }
+  handle @models {
+    import inference_upstream
+  }
+  handle @chat {
+    request_body {
+      max_size 4MB
+    }
+    import inference_upstream
+  }
+  respond "Forbidden" 403
+}

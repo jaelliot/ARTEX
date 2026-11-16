@@ -1,0 +1,36 @@
+require "shellwords"
+
+# The gateway's internal cable stays disconnected until its firewall is ready.
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV.fetch("ARTEX_VM_BOX", "linux-re-v0")
+  config.vm.box_check_update = false
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.ssh.forward_agent = false
+  config.ssh.forward_x11 = false
+  config.trigger.before [:up, :resume, :reload] do |trigger|
+    trigger.name = "Reject unsafe gateway VM state"
+    trigger.on_error = :halt
+    trigger.run = {inline: "python3 #{Shellwords.escape(File.expand_path('../verify.py', __dir__))} --gateway-pre-start"}
+  end
+  config.trigger.before :snapshot_restore do |trigger|
+    trigger.name = "Block automatic snapshot starts"
+    trigger.on_error = :halt
+    trigger.run = {inline: "sh -c 'echo Use sandbox/restore to restore a powered-off snapshot safely. >&2; exit 1'"}
+  end
+  config.vm.network "forwarded_port", guest: 22, host: 2223,
+    host_ip: "127.0.0.1", id: "ssh", auto_correct: false
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.name = "artex-inference-gateway"
+    vb.memory = 1024
+    vb.cpus = 1
+    vb.gui = false
+    vb.customize ["modifyvm", :id,
+      "--nic1", "nat", "--cableconnected1", "on",
+      "--nic2", "intnet", "--intnet2", "artex-inference", "--cableconnected2", "off",
+      "--nic3", "none", "--nic4", "none", "--nic5", "none", "--nic6", "none", "--nic7", "none", "--nic8", "none",
+      "--vrde", "off", "--clipboard-mode", "disabled", "--clipboard-file-transfers", "disabled", "--drag-and-drop", "disabled",
+      "--uart1", "off", "--uart2", "off", "--uart3", "off", "--uart4", "off", "--lpt1", "off", "--lpt2", "off",
+      "--usb-ohci", "off", "--usb-ehci", "off", "--usb-xhci", "off", "--audio-enabled", "off", "--accelerate-3d", "off"]
+  end
+end

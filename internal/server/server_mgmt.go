@@ -1974,6 +1974,13 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	p := body.LLMProfile
 	p.APIKey = body.APIKey
 	p.Streaming = body.Streaming == nil || *body.Streaming
+	if p.Format == "openai-keyless" {
+		if err := agent.ValidateKeylessBaseURL(agent.ConfigFrom(p.Format, p.Model, p.BaseURL, "", "").BaseURL); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		p.APIKey = ""
+	}
 	// The list returns the proxy masked: the placeholder sent back keeps the
 	// stored proxy and is never stored itself.
 	if isMaskedSecret(p.Proxy) {
@@ -2176,7 +2183,7 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 	// sent to the endpoint it was saved for, since base_url comes from the form.
 	apiKey := strings.TrimSpace(req.APIKey)
 	withheld := false
-	if apiKey == "" && req.ProfileID != nil {
+	if apiKey == "" && req.ProfileID != nil && req.Provider != "openai-keyless" {
 		if p, err := s.m.pg.ProfileByID(*req.ProfileID); err == nil && p != nil {
 			if sameLLMEndpoint(req.Provider, req.BaseURL, p.Format, p.BaseURL) {
 				apiKey = p.APIKey
@@ -2195,7 +2202,7 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := strings.TrimSpace(req.Provider)
 	// Ollama serves its model list keyless on the local server: no key gate.
-	if apiKey == "" && provider != "ollama" {
+	if apiKey == "" && provider != "ollama" && provider != "openai-keyless" {
 		msg := "no API Key provided"
 		if withheld {
 			msg = "no API Key provided: the saved key is only sent to the endpoint it was saved for; enter the key to list models from a different base URL or provider"
@@ -2228,6 +2235,13 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 
 	var candidates []candidate
 	switch provider {
+	case "openai-keyless":
+		b := agent.ConfigFrom(provider, "", baseURL, "", "").BaseURL
+		if err := agent.ValidateKeylessBaseURL(b); err != nil {
+			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		candidates = append(candidates, candidate{b + "/models", http.Header{}})
 	case "openai", "openai-responses":
 		// Responses API shares the OpenAI model list at /v1/models; tolerate a full
 		// endpoint URL of either format.

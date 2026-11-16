@@ -1,3 +1,5 @@
+require "shellwords"
+
 # Dedicated ARTEX VM. The guest receives no host folders or SSH agent.
 Vagrant.configure("2") do |config|
   # The reverse-engineering lab's local box includes Docker. Override only with
@@ -5,11 +7,28 @@ Vagrant.configure("2") do |config|
   config.vm.box = ENV.fetch("ARTEX_VM_BOX", "linux-re-v0")
   config.vm.box_check_update = false
   config.vm.synced_folder ".", "/vagrant", disabled: true
+  gateway_state = File.expand_path("inference-gateway/.vagrant/machines/default/virtualbox", __dir__)
+  gateway_key = Shellwords.escape(File.join(gateway_state, "private_key"))
+  gateway_hosts = Shellwords.escape(File.join(gateway_state, "gateway-known-hosts"))
+  config.ssh.host = "192.0.2.2"
+  config.ssh.port = 22
   config.ssh.forward_agent = false
   config.ssh.forward_x11 = false
-  config.ssh.insert_key = true
+  config.ssh.proxy_command = "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o ForwardAgent=no " \
+    "-o StrictHostKeyChecking=yes -o UserKnownHostsFile=#{gateway_hosts} -i #{gateway_key} " \
+    "-p 2223 -W %h:%p vagrant@127.0.0.1"
+  config.trigger.before [:up, :resume, :reload] do |trigger|
+    trigger.name = "Verify the sandbox before starting ARTEX"
+    trigger.on_error = :halt
+    trigger.run = {inline: "python3 #{Shellwords.escape(File.join(__dir__, 'verify.py'))} --pre-start"}
+  end
+  config.trigger.before :snapshot_restore do |trigger|
+    trigger.name = "Block automatic snapshot starts"
+    trigger.on_error = :halt
+    trigger.run = {inline: "sh -c 'echo Use sandbox/restore to restore a powered-off snapshot safely. >&2; exit 1'"}
+  end
   config.vm.network "forwarded_port", guest: 22, host: 2222,
-    host_ip: "127.0.0.1", id: "ssh", auto_correct: true
+    id: "ssh", disabled: true
 
   config.vm.provider "virtualbox" do |vb|
     vb.name = "artex-sandbox"
@@ -17,11 +36,13 @@ Vagrant.configure("2") do |config|
     vb.cpus = 4
     vb.gui = false
     vb.customize ["modifyvm", :id,
-      "--nic1", "nat", "--nat-localhostreachable1", "off",
+      "--nic1", "intnet", "--intnet1", "artex-inference", "--cableconnected1", "on",
       "--nic2", "none", "--nic3", "none", "--nic4", "none",
       "--nic5", "none", "--nic6", "none", "--nic7", "none", "--nic8", "none",
       "--vrde", "off", "--clipboard-mode", "disabled",
       "--clipboard-file-transfers", "disabled", "--drag-and-drop", "disabled",
+      "--uart1", "off", "--uart2", "off", "--uart3", "off", "--uart4", "off",
+      "--lpt1", "off", "--lpt2", "off",
       "--usb-ohci", "off", "--usb-ehci", "off", "--usb-xhci", "off",
       "--audio-enabled", "off", "--accelerate-3d", "off"]
   end

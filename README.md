@@ -404,8 +404,19 @@ runtime supports it.
 **LLM**: `export ANTHROPIC_API_KEY=sk-...` (or `OPENAI_API_KEY`), or configure it in the UI's
 "LLM Configuration" page, which can also add a local Ollama server as a keyless provider (format
 "Ollama", default base URL `http://127.0.0.1:11434/v1`). Optional:
-`ARTEX_LLM_PROVIDER` (`anthropic | openai | openai-responses | ollama`), `ARTEX_LLM_MODEL`,
+`ARTEX_LLM_PROVIDER` (`anthropic | openai | openai-responses | ollama | openai-keyless`), `ARTEX_LLM_MODEL`,
 `ARTEX_LLM_BASE_URL`, `ARTEX_LLM_PROXY`.
+
+For a keyless OpenAI-compatible server such as FreeToken, create an
+**OpenAI-compatible (no API key)** profile and enter the server's explicit
+`/v1` base URL and model name. No API key or authorization header is sent.
+For environment configuration use `ARTEX_LLM_PROVIDER=openai-keyless` with
+`ARTEX_LLM_BASE_URL` and `ARTEX_LLM_MODEL`. Set the profile's context window to
+the capacity actually available on the server, and select a thinking effort
+only if the server supports it. The server must be reachable from ARTEX's own
+network environment; see [the sandbox gateway instructions](sandbox/README.md)
+for the inference-only Vagrant configuration.
+Set `ARTEX_LLM_STREAM=false` to use non-streaming mode with environment configuration.
 
 **Base URL gotcha**: for the Anthropic format, enter the host **without** `/v1` (for example
 `https://api.anthropic.com`); ARTEX appends `/v1/messages`. OpenAI-format providers append

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd "$(dirname "$0")" && pwd)
+export VAGRANT_CHECKPOINT_DISABLE=1
+(
+  cd "$root/inference-gateway"
+  vagrant up --no-provision --provider=virtualbox
+)
+if ! VBoxManage list dhcpservers | grep -q '^NetworkName: *artex-inference$'; then
+  VBoxManage dhcpserver add --network=artex-inference --server-ip=192.0.2.10 --netmask=255.255.255.0 --lower-ip=192.0.2.2 --upper-ip=192.0.2.2 --enable
+fi
+gateway_id=$(cat "$root/inference-gateway/.vagrant/machines/default/virtualbox/id")
+info=$(VBoxManage showvminfo "$gateway_id" --machinereadable)
+if grep -qx 'cableconnected2="off"' <<<"$info"; then
+  python3 "$root/verify.py" --gateway-only --cable-off
+  VBoxManage controlvm "$gateway_id" setlinkstate2 on
+  if ! python3 "$root/verify.py" --gateway-only; then
+    VBoxManage controlvm "$gateway_id" setlinkstate2 off
+    exit 1
+  fi
+else
+  python3 "$root/verify.py" --gateway-only
+fi
+(
+  cd "$root"
+  vagrant up --no-provision --provider=virtualbox
+)
+python3 "$root/verify.py"

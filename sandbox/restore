@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# != 2 || ( $1 != app && $1 != gateway ) ]]; then
+  echo "Usage: ./restore app|gateway SNAPSHOT" >&2
+  exit 2
+fi
+root=$(cd "$(dirname "$0")" && pwd)
+export VAGRANT_CHECKPOINT_DISABLE=1
+if [[ $1 == gateway ]]; then
+  "$root/stop"
+  state="$root/inference-gateway/.vagrant/machines/default/virtualbox/id"
+else
+  (cd "$root" && vagrant halt)
+  state="$root/.vagrant/machines/default/virtualbox/id"
+fi
+id=$(cat "$state")
+VBoxManage snapshot "$id" restore "$2"
+"$root/start"

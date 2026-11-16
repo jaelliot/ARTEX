@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The test image must already be present; the fixture has no network access.
+image=${ARTEX_OFFLINE_FIXTURE_IMAGE:-golang:1.25.8-bookworm}
+timeout 20 docker run --rm --pull never --network none --read-only \
+  --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+  --security-opt apparmor=docker-default --security-opt seccomp=builtin \
+  --memory 64m --memory-swap 64m --cpus 0.5 --pids-limit 16 --shm-size 1m \
+  --ulimit nofile=64:64 --ulimit fsize=8192:8192 --ulimit core=0:0 \
+  --tmpfs /scratch:rw,nosuid,nodev,noexec,size=8m,uid=65534,gid=65534,mode=700 \
+  --entrypoint /usr/bin/env "$image" -i PATH=/usr/bin:/bin HOME=/scratch TMPDIR=/scratch \
+  /bin/sh -c '
+    set -eu
+    test "$(id -u)" = 65534
+    grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
+    grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+    grep -Eq "^Seccomp:[[:space:]]+2$" /proc/self/status
+    grep -qx "docker-default (enforce)" /proc/self/attr/current
+    grep -Eq " / / ro(,| )" /proc/self/mountinfo
+    test ! -e /var/run/docker.sock
+    if touch /readonly-check 2>/dev/null; then exit 1; fi
+    touch /scratch/writable
+    echo "Offline container controls verified"
+  '
