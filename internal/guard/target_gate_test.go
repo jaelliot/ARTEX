@@ -88,7 +88,7 @@ func TestTargetGateRunsOutsideEnabledToolSet(t *testing.T) {
 		{"WebFetch", fetchApp},
 	}
 	ctx := gateOn(context.Background(), "7", time.Minute)
-	for name, g := range map[string]*Guard{"guard without rules": New(), "target-only guard": NewTargetOnly(nil)} {
+	for name, g := range map[string]*Guard{"guard without rules": New(), "coordinator guard": NewCoordinator(nil)} {
 		gate := &fakeGate{t: t}
 		g.gate = gate
 		for _, c := range calls {
@@ -125,14 +125,14 @@ func TestTargetGateRunsOutsideEnabledToolSet(t *testing.T) {
 	}
 }
 
-// The target-only guard (planner, main agent) never records a call that
+// The coordinator guard (planner, main agent) never records a call that
 // passes. It records a block, through block(), in its own ring.
-func TestTargetOnlyGuardRecordsBlocksOnly(t *testing.T) {
+func TestCoordinatorGuardRecordsBlocksOnly(t *testing.T) {
 	task := New() // the task's main guard, with its own ring
 	pre(task, context.Background(), "Bash", `{"command":"id"}`)
 	before := task.Audit()
 
-	g := NewTargetOnly(nil)
+	g := NewCoordinator(nil)
 	gate := &fakeGate{t: t}
 	g.gate = gate
 	ctx := gateOn(context.Background(), "7", time.Minute)
@@ -193,7 +193,7 @@ func TestTargetOnlyGuardRecordsBlocksOnly(t *testing.T) {
 
 // One call goes back to the pin lookup at most three times.
 func TestTargetRequestLoopIsBoundedToThreePasses(t *testing.T) {
-	g := NewTargetOnly(nil)
+	g := NewCoordinator(nil)
 	// Every approval is followed by a check that finds the target uncovered
 	// again (its addresses keep changing).
 	gate := &fakeGate{t: t, check: func(int) ([]intercept.TargetRequest, intercept.TargetResult) {
@@ -735,6 +735,74 @@ func allowDoesNotSatisfyGate(t *testing.T, g *gateDB, input, decidedBy string) {
 	}
 	if pins := g.pins(); len(pins) != 1 || pins[0].Host != "app.example.com" || pins[0].Port != 443 || !slices.Equal(pins[0].PinnedIPs, []string{"203.0.113.7"}) {
 		t.Fatalf("pins = %+v", pins)
+	}
+}
+
+// Coordinator sessions enforce rule asks and merge them with target approvals.
+func TestCoordinatorRuleApproval(t *testing.T) {
+	g := newGateDB(t)
+	m := marker(t)
+	rule := g.rule("ask", m)
+	guard := NewCoordinator(g.ic)
+
+	// A normal planner call waits for the operator, even with the target gate off.
+	ch := call(guard, g.ctx(false, time.Minute), "Bash", `{"command":"echo `+m+`"}`)
+	row := g.onePending(ch)
+	if row.ruleID != rule.ID || row.source != "rule" {
+		t.Fatalf("pending row = %+v, want the configured rule", row)
+	}
+	g.decide(row.id, false)
+	if r := g.result(ch); !r.block {
+		t.Fatalf("rejected call ran: %+v", r)
+	}
+
+	// A new target and rule ask share one decision.
+	ch = call(guard, g.ctx(true, time.Minute), "Bash", `{"command":"curl https://app.example.com/ # `+m+`"}`)
+	row = g.onePending(ch)
+	if row.ruleID != rule.ID || row.targetKey != "app.example.com:443" || row.source != "target" {
+		t.Fatalf("merged row = %+v, want rule and target", row)
+	}
+	g.decide(row.id, true)
+	if r := g.result(ch); r.block {
+		t.Fatalf("approved call blocked: %+v", r)
+	}
+	if len(g.pending()) != 0 || len(g.pins()) != 1 {
+		t.Fatalf("pending=%+v pins=%+v", g.pending(), g.pins())
+	}
+
+	// The terminal planner round cannot remain pending after a task deadline.
+	ctx := intercept.WithNoRuleApprovalWait(g.ctx(false, 0))
+	if block, msg := pre(guard, ctx, "Bash", `{"command":"echo `+m+`"}`); !block || !strings.Contains(msg, "cannot wait") {
+		t.Fatalf("final-round ask: block=%v message=%q", block, msg)
+	}
+	if len(g.pending()) != 0 {
+		t.Fatalf("final-round ask left a pending approval: %+v", g.pending())
+	}
+	rows := g.rows()
+	if last := rows[len(rows)-1]; last.status != "denied" || last.decidedBy != "system" || last.ruleID != rule.ID {
+		t.Fatalf("final-round record = %+v, want system denial tied to the rule", last)
+	}
+}
+
+func TestCoordinatorUsesFallbackJudge(t *testing.T) {
+	g := newGateDB(t)
+	g.judge("deny")
+	guard := NewCoordinator(g.ic)
+	if block, msg := pre(guard, g.ctx(false, time.Minute), "Bash", `{"command":"echo safe-test"}`); !block || !strings.Contains(msg, "judge says deny") {
+		t.Fatalf("fallback judge: block=%v message=%q", block, msg)
+	}
+	rows := g.rows()
+	if len(rows) != 1 || rows[0].status != "denied" || rows[0].decidedBy != "model" {
+		t.Fatalf("judge record = %+v, want model denial", rows)
+	}
+	g.judge("ask")
+	ctx := intercept.WithNoRuleApprovalWait(g.ctx(false, 0))
+	if block, msg := pre(guard, ctx, "Bash", `{"command":"echo safe-test"}`); !block || !strings.Contains(msg, "cannot wait") {
+		t.Fatalf("final-round judge ask: block=%v message=%q", block, msg)
+	}
+	rows = g.rows()
+	if len(rows) != 2 || rows[1].status != "denied" || rows[1].decidedBy != "system" || rows[1].source != "model" {
+		t.Fatalf("final-round judge record = %+v, want system denial sourced from model", rows)
 	}
 }
 

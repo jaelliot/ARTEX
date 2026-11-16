@@ -38,7 +38,7 @@ type Guard struct {
 	attrib      map[string]int // failure attribution counts (Observer / G5)
 	reg         *hook.Registry
 	interceptor *intercept.Interceptor // optional; nil disables user-configured rules
-	targetOnly  bool                   // planner / main agent: built-in deny rules and target gate only, no user rules, no judge, no audit ring
+	coordinator bool                   // planner / main agent: separate audit ring, no post-tool attribution
 	gate        targetGate             // the target gate; nil without an interceptor
 }
 
@@ -49,13 +49,11 @@ func New() *Guard { return newGuard(nil) }
 // NewWithInterceptor creates a Guard with user-configured intercept rules.
 func NewWithInterceptor(ic *intercept.Interceptor) *Guard { return newGuard(ic) }
 
-// NewTargetOnly creates the Guard for the planner and the main agent. Their tool
-// calls pass through the built-in deny rules and the target gate only: the user
-// intercept rules and the fallback judge are not extended to them, and their
-// calls that pass are not written to the audit ring (which keeps the worker
-// history of the task's main Guard).
-func NewTargetOnly(ic *intercept.Interceptor) *Guard {
-	g := &Guard{attrib: map[string]int{}, interceptor: ic, targetOnly: true}
+// NewCoordinator creates a guard for planner and main-agent calls. It applies
+// the same interception rules and target gate as the worker guard while keeping
+// its audit ring separate and recording only blocked calls.
+func NewCoordinator(ic *intercept.Interceptor) *Guard {
+	g := &Guard{attrib: map[string]int{}, interceptor: ic, coordinator: true}
 	g.setGate(ic)
 	g.reg = hook.NewRegistry().On(hook.PreToolUse, g.preToolUse)
 	return g
@@ -82,7 +80,7 @@ func (g *Guard) setGate(ic *intercept.Interceptor) {
 func (g *Guard) Hooks() *hook.Registry { return g.reg }
 
 func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
-	if g.targetOnly {
+	if g.coordinator {
 		// Not recorded: the audit ring is for the gated worker and chat calls.
 		return g.applyIntercept(ctx, ev)
 	}
@@ -132,25 +130,14 @@ func (g *Guard) gateScope(ctx context.Context) (intercept.TargetScope, bool) {
 // then the target gate. Both rules and the fallback judge receive the complete
 // tool input.
 //
-// The rules and the judge apply to the enabled tools of a full guard. A
-// target-only guard applies the built-in deny rules alone, whether its gate is
-// on or off. The target gate applies to every tool call of a session whose gate
+// The rules and judge apply to enabled tools for every guard. The target gate
+// applies to every tool call of a session whose gate
 // is on: a deny blocks first, before any target request exists; an allow by a
 // rule or by the judge does not satisfy the gate; an ask and an unpinned target
 // share one approval request.
 func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
-	if g.targetOnly && g.interceptor != nil {
-		// The planner and the main agent run Bash too (#124, F11): the built-in
-		// deny rules apply to them, before the target gate. User rules and the
-		// judge stay with the full guard.
-		if dec, ok := g.interceptor.MatchBuiltin(ev.ToolName, ev.Input); ok {
-			ctx = intercept.WithCall(ctx, ev.ToolName, ev.Input)
-			g.interceptor.Log(ctx, intercept.ConvIDFromContext(ctx), dec, ev.ToolName, ev.Input, "denied")
-			return g.block(ev.ToolName, systemBlockMessage(dec.Message), "")
-		}
-	}
 	scope, gated := g.gateScope(ctx)
-	rules := !g.targetOnly && g.interceptor != nil && g.interceptor.IsToolEnabled(ev.ToolName)
+	rules := g.interceptor != nil && g.interceptor.IsToolEnabled(ev.ToolName)
 	if !rules && !gated {
 		return hook.Result{}
 	}
@@ -183,6 +170,11 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 		// Record explicit rule and model approvals so review details remain auditable.
 		g.interceptor.Log(ctx, intercept.ConvIDFromContext(ctx), dec, ev.ToolName, ev.Input, "allowed")
 	case "ask":
+		if intercept.RuleApprovalCannotWait(ctx) {
+			reason := "manual approval required; this final planner round cannot wait"
+			g.interceptor.LogNoWait(ctx, dec, ev.ToolName, ev.Input, reason)
+			return g.block(ev.ToolName, systemBlockMessage(reason), "")
+		}
 		// If the worker context is already cancelled (task stopped / killed), block
 		// immediately without creating a pending record — avoids orphaned DB entries
 		// and makes execOne complete fast, reducing the race against drainSynthetic.

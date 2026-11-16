@@ -70,3 +70,7 @@ posture-runs/
 
 # benchmark runner output (one dir per run)
 benchmark-results/
+
+# Browser extension scripts are built from TypeScript and kept for unpacked installs.
+!extension/dist/
+!extension/dist/*.js

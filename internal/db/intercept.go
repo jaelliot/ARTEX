@@ -149,6 +149,15 @@ func (d *DB) DecideInterceptPending(id int64, status string) error {
 // rule matches for observability — they don't block and need no user action, so unlike
 // CreateInterceptPending (which starts 'pending') this records the outcome directly.
 func (d *DB) CreateDecidedIntercept(ruleID, convID int64, taskID, agentName, toolName string, input []byte, status, reason string, audits ...*InterceptAudit) (int64, error) {
+	return d.createDecidedIntercept(ruleID, convID, taskID, agentName, toolName, input, status, reason, "", audits...)
+}
+
+// CreateSystemDeniedIntercept records an automatic refusal without creating a pending approval.
+func (d *DB) CreateSystemDeniedIntercept(ruleID, convID int64, taskID, agentName, toolName string, input []byte, reason string, audit *InterceptAudit) (int64, error) {
+	return d.createDecidedIntercept(ruleID, convID, taskID, agentName, toolName, input, "denied", reason, "system", audit)
+}
+
+func (d *DB) createDecidedIntercept(ruleID, convID int64, taskID, agentName, toolName string, input []byte, status, reason, actor string, audits ...*InterceptAudit) (int64, error) {
 	raw := json.RawMessage(input)
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
@@ -168,9 +177,12 @@ func (d *DB) CreateDecidedIntercept(ruleID, convID int64, taskID, agentName, too
 	}
 	// Rows logged here were settled without a human: by the matching rule, or by
 	// the model judge when no rule owns the decision.
-	decidedBy := "model"
-	if ruleID != 0 {
-		decidedBy = "rule"
+	decidedBy := actor
+	if decidedBy == "" {
+		decidedBy = "model"
+		if ruleID != 0 {
+			decidedBy = "rule"
+		}
 	}
 	var id int64
 	err := d.QueryRow(`

@@ -229,7 +229,7 @@ func TestInterceptDecideRefusesEmptyPinOverHTTP(t *testing.T) {
 }
 
 // The hooks of a task run the gate with the task's own scope: the worker
-// guard and the target-only guard of the planner and the main agent. The flag
+// guard and the coordinator guard of the planner and the main agent. The flag
 // is the task's, read on every call.
 func TestTaskGuardsRunTargetGate(t *testing.T) {
 	g := newGateServer(t)
@@ -258,7 +258,7 @@ func TestTaskGuardsRunTargetGate(t *testing.T) {
 	// Gate off, the default: both guards pass the call and write nothing.
 	for name, hooks := range map[string]interface {
 		PreToolUse(context.Context, string, []byte) (bool, string, []byte)
-	}{"worker": task.Guard.Hooks(), "planner": task.TargetGuard.Hooks()} {
+	}{"worker": task.Guard.Hooks(), "planner": task.CoordinatorGuard.Hooks()} {
 		if block, msg := hook(hooks, ctxOf(name, 0)); block {
 			t.Fatalf("gate off, %s: blocked: %s", name, msg)
 		}
@@ -277,7 +277,7 @@ func TestTaskGuardsRunTargetGate(t *testing.T) {
 		hooks interface {
 			PreToolUse(context.Context, string, []byte) (bool, string, []byte)
 		}
-	}{{"planner", task.TargetGuard.Hooks()}, {"worker", task.Guard.Hooks()}} {
+	}{{"planner", task.CoordinatorGuard.Hooks()}, {"worker", task.Guard.Hooks()}} {
 		block, msg := hook(c.hooks, ctxOf(c.name, 0))
 		if !block || !strings.Contains(msg, "TARGET_APPROVAL_PENDING: target 203.0.113.7:8080: ") {
 			t.Fatalf("gate on, %s: block=%v msg=%q", c.name, block, msg)
@@ -294,8 +294,8 @@ WHERE task_id=$1 AND status='pending' AND target_key='203.0.113.7:8080'`, task.I
 		t.Fatalf("%d open requests by %q, want one, opened by the planner's call", open, agentName)
 	}
 	// The planner's block is in the ring of its own guard, not in the task's.
-	if audit := task.TargetGuard.Audit(); len(audit) != 1 || audit[0].Action != "block" {
-		t.Fatalf("target-only ring = %+v, want the one block", audit)
+	if audit := task.CoordinatorGuard.Audit(); len(audit) != 1 || audit[0].Action != "block" {
+		t.Fatalf("coordinator ring = %+v, want the one block", audit)
 	}
 	for _, e := range task.Guard.Audit() {
 		if e.Action == "block" && !strings.Contains(e.Reason, "TARGET_APPROVAL_PENDING") {
@@ -311,15 +311,15 @@ WHERE task_id=$1 AND status='pending' AND target_key='203.0.113.7:8080'`, task.I
 		!slices.Equal(pins[0].PinnedIPs, []string{"203.0.113.7"}) || pins[0].DecidedBy != "ARTEX" {
 		t.Fatalf("pins = %+v, %v", pins, err)
 	}
-	ring := len(task.TargetGuard.Audit())
+	ring := len(task.CoordinatorGuard.Audit())
 	for name, hooks := range map[string]interface {
 		PreToolUse(context.Context, string, []byte) (bool, string, []byte)
-	}{"worker": task.Guard.Hooks(), "planner": task.TargetGuard.Hooks()} {
+	}{"worker": task.Guard.Hooks(), "planner": task.CoordinatorGuard.Hooks()} {
 		if block, msg := hook(hooks, ctxOf(name, 0)); block {
 			t.Fatalf("pinned, %s: blocked: %s", name, msg)
 		}
 	}
-	if n := len(task.TargetGuard.Audit()); n != ring {
+	if n := len(task.CoordinatorGuard.Audit()); n != ring {
 		t.Fatalf("a passing planner call added %d entries to the ring", n-ring)
 	}
 	// Gate off again: the gate is out of the way at once.

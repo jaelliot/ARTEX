@@ -18,7 +18,7 @@ import (
 
 // Target-gate wiring: every platform-owned session starts on a context that
 // carries the approval scope of its task or conversation, and the planner and
-// the main agent run with the task's target-only hooks. The gate is off, so
+// the main agent run with the task's coordinator hooks. The gate is off, so
 // none of this changes what a session does.
 
 // innerHooksProbe is a programmable inner HookRunner that records what
@@ -300,16 +300,16 @@ func auditedTools(g *guard.Guard) []string {
 // The five session entry points — planner round, final planner round, main-agent
 // turn, worker intent, conversation turn (chat and retester share it) — each run
 // on a context carrying the scope the gate will decide on, with the gate off.
-// The planner and the main agent hand their tool calls to Task.TargetGuard, the
-// worker to Task.Guard. The target-only guard keeps no record, so the test puts
+// The planner and the main agent hand their tool calls to Task.CoordinatorGuard, the
+// worker to Task.Guard. The coordinator guard keeps no record, so the test puts
 // a recording guard in its place.
 func TestEveryAgentKindCarriesTargetScope(t *testing.T) {
 	f := newTargetScopeFixture(t)
 	taskSites := []struct {
-		name       string
-		run        func(*testing.T, *Task) scopeProbe
-		wait       time.Duration
-		targetOnly bool // the session runs on Task.TargetGuard, not Task.Guard
+		name        string
+		run         func(*testing.T, *Task) scopeProbe
+		wait        time.Duration
+		coordinator bool // the session runs on Task.CoordinatorGuard, not Task.Guard
 	}{
 		{"planner round", f.plannerLoopRound, intercept.DefaultTargetWaitBound, true},
 		{"final planner round", f.finalPlannerRound, 0, true},
@@ -320,13 +320,13 @@ func TestEveryAgentKindCarriesTargetScope(t *testing.T) {
 		t.Run(site.name, func(t *testing.T) {
 			task := f.newTask(t)
 			recorder := guard.New()
-			task.TargetGuard = recorder
+			task.CoordinatorGuard = recorder
 			got := site.run(t, task)
 			onTarget, onMain := auditedTools(recorder), auditedTools(task.Guard)
-			if site.targetOnly && (len(onTarget) != 1 || onTarget[0] != "LS" || len(onMain) != 0) {
+			if site.coordinator && (len(onTarget) != 1 || onTarget[0] != "LS" || len(onMain) != 0) {
 				t.Fatalf("tool calls seen by TargetGuard=%v Guard=%v, want one LS on TargetGuard only", onTarget, onMain)
 			}
-			if !site.targetOnly && (len(onMain) != 1 || onMain[0] != "LS" || len(onTarget) != 0) {
+			if !site.coordinator && (len(onMain) != 1 || onMain[0] != "LS" || len(onTarget) != 0) {
 				t.Fatalf("tool calls seen by TargetGuard=%v Guard=%v, want one LS on Guard only", onTarget, onMain)
 			}
 			if !got.ok || got.scope.TaskID != task.ID || got.scope.ConversationID != 0 {
@@ -382,11 +382,8 @@ func TestFinalPlannerRoundHasZeroWait(t *testing.T) {
 	}
 }
 
-// With the gate off (the task default) the target-only hooks are a no-op: a call is
-// allowed and nothing is written — no intercept row, no audit-ring entry. The
-// control runs the same call through the task's full Guard, where a deny rule
-// blocks it and logs a row, so the rule and the row count are known to be live.
-func TestTargetGateSeamAllowsWithoutDBWrite(t *testing.T) {
+// Coordinator and worker guards apply the same configured rule with the target gate off.
+func TestCoordinatorGuardEnforcesRule(t *testing.T) {
 	f := newTargetScopeFixture(t)
 	task := f.newTask(t)
 	ic := f.m.interceptor
@@ -429,18 +426,92 @@ func TestTargetGateSeamAllowsWithoutDBWrite(t *testing.T) {
 	}
 	ring := len(task.Guard.Audit())
 
-	block, msg, updated := task.TargetGuard.Hooks().PreToolUse(ctx, "Bash", input)
-	if block || msg != "" || updated != nil {
-		t.Fatalf("target-only hooks: block=%v msg=%q updated=%q, want the call allowed untouched", block, msg, updated)
+	block, msg, updated := task.CoordinatorGuard.Hooks().PreToolUse(ctx, "Bash", input)
+	if !block || !strings.Contains(msg, "target seam probe") || updated != nil {
+		t.Fatalf("coordinator hooks: block=%v msg=%q updated=%q, want rule denial", block, msg, updated)
 	}
-	task.TargetGuard.Hooks().PostToolUse(ctx, "Bash", input, []byte(`"ok"`), false)
-	if n := rows(); n != 1 {
-		t.Fatalf("target-only hooks changed the intercept rows: %d, want 1", n)
+	task.CoordinatorGuard.Hooks().PostToolUse(ctx, "Bash", input, []byte(`"ok"`), false)
+	if n := rows(); n != 2 {
+		t.Fatalf("coordinator hooks logged %d intercept rows, want 2", n)
 	}
-	if n := len(task.TargetGuard.Audit()); n != 0 {
-		t.Fatalf("target-only guard wrote %d audit entries, want none", n)
+	if n := len(task.CoordinatorGuard.Audit()); n != 1 {
+		t.Fatalf("coordinator guard wrote %d audit entries, want one block", n)
 	}
 	if n := len(task.Guard.Audit()); n != ring {
 		t.Fatalf("the task's audit ring grew from %d to %d entries", ring, n)
+	}
+}
+
+func TestCoordinatorSessionsEnforceConfiguredDeny(t *testing.T) {
+	f := newTargetScopeFixture(t)
+	ic := f.m.interceptor
+	oldTools, err := ic.GetEnabledTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ic.SetEnabledTools(oldTools) })
+	if err := ic.SetEnabledTools([]string{"LS"}); err != nil {
+		t.Fatal(err)
+	}
+	rule, err := f.m.pg.CreateInterceptRule("deny test listing", "tool_name", "string", "LS", "deny", "listing denied", 1000000, true, false, 0, "deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.m.pg.DeleteInterceptRule(rule.ID); ic.Invalidate() })
+	ic.Invalidate()
+	for _, site := range []struct {
+		name string
+		run  func(*testing.T, *Task) scopeProbe
+	}{
+		{"planner", f.plannerLoopRound},
+		{"final planner", f.finalPlannerRound},
+		{"main agent", f.mainAgentTurn},
+	} {
+		t.Run(site.name, func(t *testing.T) {
+			task := f.newTask(t)
+			site.run(t, task)
+			audit := task.CoordinatorGuard.Audit()
+			if len(audit) != 1 || audit[0].Tool != "LS" || audit[0].Action != "block" || !strings.Contains(audit[0].Reason, "listing denied") {
+				t.Fatalf("coordinator audit = %+v, want denied listing", audit)
+			}
+		})
+	}
+}
+
+func TestFinalPlannerDoesNotWaitForRuleApproval(t *testing.T) {
+	f := newTargetScopeFixture(t)
+	ic := f.m.interceptor
+	oldTools, err := ic.GetEnabledTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ic.SetEnabledTools(oldTools) })
+	if err := ic.SetEnabledTools([]string{"LS"}); err != nil {
+		t.Fatal(err)
+	}
+	rule, err := f.m.pg.CreateInterceptRule("ask for test listing", "tool_name", "string", "LS", "ask", "approval needed", 1000000, true, false, 0, "deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.m.pg.DeleteInterceptRule(rule.ID); ic.Invalidate() })
+	ic.Invalidate()
+	task := f.newTask(t)
+	f.usePlanner(newScopeProbeProvider())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	f.e.runFinalPlannerRound(ctx, task, false)
+	if ctx.Err() != nil {
+		t.Fatal("final planner waited for approval")
+	}
+	audit := task.CoordinatorGuard.Audit()
+	if len(audit) != 1 || audit[0].Action != "block" || !strings.Contains(audit[0].Reason, "cannot wait") {
+		t.Fatalf("final planner audit = %+v, want nonwaiting block", audit)
+	}
+	var pending int
+	if err := f.m.pg.QueryRow(`SELECT count(*) FROM intercept_pending WHERE task_id=$1 AND status='pending'`, task.ID).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("final planner left %d pending approvals", pending)
 	}
 }

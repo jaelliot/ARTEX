@@ -211,6 +211,9 @@ worker remains confined to the intent it claimed.
   <summary>Using the traffic capture extension</summary>
 
   - Load the unpacked extension from `extension/` (Chrome/Edge: Developer Mode → Load unpacked);
+  - The TypeScript sources are in `extension/src/`; after installing the `web/` dependencies,
+    rebuild the checked-in scripts with `web/node_modules/.bin/tsc -p extension/tsconfig.json`
+    and run `cd extension && node --test tests/capture.test.cjs`;
   - In the popup, set your ARTEX URL and token, then press **Start capture** on the tab you are
     browsing;
   - Use the site normally; text requests/responses are batched to `POST /api/traffic/ingest`
@@ -230,16 +233,17 @@ worker remains confined to the intent it claimed.
 
 ### Control without slowing down
 
-- **Interception gate**: every tool call can require human approval, with rules by `string`,
-  `regex` or **argv prefix**. An argv rule is a JSON array of 1 to 8 tokens (Bash only, for
+- **Interception gate**: configured rules can require human approval for supported tool calls,
+  using `string`, `regex` or **argv prefix** matching for workers, the planner and the main
+  agent. An argv rule is a JSON array of 1 to 8 tokens (Bash only, for
   example `["git","push"]`); it matches only a single simple command whose parsed prefix equals
   the pattern exactly. Pipes, lists, redirections, prefix assignments, subshells, background jobs,
   wrapper programs and command/parameter substitutions do not match; flags are ignored by
   construction (`["git","push"]` covers `git push --force`, but `git -C /repo push` matches
   nothing). Each approval records who decided: `human`, `rule`, `model` or `system`.
-- **Scope and target gate**: scope rows define the coverage denominator; assets outside the
-  declared scope are not explored. The target gate (off by default, API-only) can refuse
-  destinations that were not approved.
+- **Scope and target gate**: scope rows define the coverage denominator; they do not block
+  tool calls outside that scope. The target gate (off by default, API-only) can refuse
+  destinations that were not approved. Use independent network restrictions as well.
 - **Budgets**: `ARTEX_TASK_BUDGET_TOKENS` / `ARTEX_TASK_BUDGET_TURNS` cap a whole task (planner and
   workers); `ARTEX_INTENT_BUDGET_TOKENS` / `ARTEX_INTENT_BUDGET_TURNS` cap one worker run. Near the
   limit the task enters a forced wrap-up; a worker is not started when the remaining budget cannot
@@ -248,7 +252,7 @@ worker remains confined to the intent it claimed.
   targets (per-host rate, burst, in-flight limit, jitter, backoff on 429/503, short GET caching).
   With a profile set, agents also receive low-and-slow flags for the installed scanners.
 - **Untrusted-output boundary (on by default)**: tool results are framed between nonce-tagged
-  markers so the model treats them as data, not instructions. Disable with
+  markers to label them as untrusted data. Model compliance is not guaranteed. Disable with
   `ARTEX_UNTRUSTED_BOUNDARY=0`.
 
 ### Assets and coverage
@@ -408,10 +412,16 @@ runtime supports it.
 `/chat/completions` (or `/responses` for `openai-responses`), so their base **does** end in `/v1`
 (for example `https://api.openai.com/v1`).
 
+**Local model context**: set each active LLM profile's `Context window (K)` to no more than the
+context actually allocated by the inference server. This setting controls ARTEX's compaction; it
+does not allocate server context. `0` assumes 200,000 tokens. For example, use `128` only when
+the server allocates at least 128,000 tokens. Check role-specific bindings and fallback profiles.
+
 **Concurrency**: work agents per task, in "System Settings" (default 3).
 
 **Untrusted-output boundary (on by default)**: tool results for the worker, planner, chat and main
-agent are framed between nonce-tagged markers so the model treats them as data, not instructions.
+agent are framed between nonce-tagged markers to label them as untrusted data. Model compliance is
+not guaranteed.
 Unset or empty, the boundary is on; set `ARTEX_UNTRUSTED_BOUNDARY=0` (or `false` / `off` / `no`) to
 disable it. Cost: about 154 bytes per tool result plus one system note.
 

@@ -71,7 +71,7 @@ type Task struct {
 	DeadlineAt           int64                  `json:"deadline_at,omitempty"`
 	Store                *pgdb.ExplorationStore `json:"-"`
 	Guard                *guard.Guard           `json:"-"`
-	TargetGuard          *guard.Guard           `json:"-"` // planner and main-agent hooks: target gate only
+	CoordinatorGuard     *guard.Guard           `json:"-"` // planner and main-agent hooks, with a separate audit ring
 	notify               chan struct{}
 	lifecycleMu          sync.RWMutex
 	llmMu                sync.RWMutex
@@ -890,7 +890,7 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		PlanQuietMode:   pt.PlanQuietMode,
 		CoverageEnabled: pt.CoverageEnabled,
 		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
-		Store: store, Guard: guard.NewWithInterceptor(ic), TargetGuard: guard.NewTargetOnly(ic), notify: make(chan struct{}, 1),
+		Store: store, Guard: guard.NewWithInterceptor(ic), CoordinatorGuard: guard.NewCoordinator(ic), notify: make(chan struct{}, 1),
 		interceptor: ic,
 	}
 	t.targetGate.Store(pt.TargetGate)

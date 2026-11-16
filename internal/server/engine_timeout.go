@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/internal/agent"
 	"github.com/Autumn-27/artex/internal/db"
+	"github.com/Autumn-27/artex/internal/intercept"
 )
 
 // Task-level timeout coordinator (see docs/task-timeout-and-settle-design.md §4/§8.5).
@@ -299,8 +300,9 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task, budget bool)
 	tTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	// The final round judges, it does not explore: a gated call never waits here.
 	fctx = e.plannerGateContext(fctx, t, 0)
+	fctx = intercept.WithNoRuleApprovalWait(fctx)
 	e.BeginLLMCall(t.ID)
-	met, reason, err := planner.Plan(fctx, tTaskID, e.m.assets, t.Store, t.Goal, t.drainTriggers(), t.TargetGuard.Hooks(), emit)
+	met, reason, err := planner.Plan(fctx, tTaskID, e.m.assets, t.Store, t.Goal, t.drainTriggers(), t.CoordinatorGuard.Hooks(), emit)
 	e.EndLLMCall(t.ID)
 	if err != nil {
 		log.Printf("[deadline] task %s final planning error: %v", t.ID, err)

@@ -77,6 +77,19 @@ func taskEmitFromCtx(ctx context.Context) func(db.Activity) {
 	return f
 }
 
+// noRuleApprovalWaitKey marks a terminal planner round that must not wait for
+// an operator decision. An ask in this context is blocked instead.
+type noRuleApprovalWaitKey struct{}
+
+func WithNoRuleApprovalWait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRuleApprovalWaitKey{}, true)
+}
+
+func RuleApprovalCannotWait(ctx context.Context) bool {
+	v, _ := ctx.Value(noRuleApprovalWaitKey{}).(bool)
+	return v
+}
+
 // targetScopeCtxKey is a separate unexported key type for the target-gate scope.
 type targetScopeCtxKey struct{}
 
@@ -682,49 +695,6 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	return Decision{}, false
 }
 
-// builtinRulePrefix marks the rules seeded by the platform (db.seedDefaultInterceptRules
-// and its v2/v3 migrations).
-const builtinRulePrefix = "[built-in]"
-
-// MatchBuiltin is Match restricted to the built-in deny rules: the enabled rules
-// whose name starts with "[built-in]" and whose action is deny, on the tools that
-// enter the rule system. It returns the first match in priority order. User rules,
-// allow and ask rules, and the judge are not consulted. The planner and the main
-// agent use it (#124, F11). An interceptor without a database and without loaded
-// rules matches nothing.
-func (i *Interceptor) MatchBuiltin(toolName string, input []byte) (Decision, bool) {
-	i.mu.RLock()
-	loaded := i.cached != nil
-	i.mu.RUnlock()
-	if !loaded && i.db == nil {
-		return Decision{}, false
-	}
-	if !i.IsToolEnabled(toolName) {
-		return Decision{}, false
-	}
-	rules, err := i.rules()
-	if err != nil {
-		return Decision{}, false
-	}
-	for _, r := range rules {
-		if r.Action != "deny" || !strings.HasPrefix(r.Name, builtinRulePrefix) || !ruleMatches(r, toolName, input) {
-			continue
-		}
-		msg := r.Message
-		if msg == "" {
-			msg = defaultMessage(r.Action, r.Name)
-		}
-		configJSON, _ := json.Marshal(r.InterceptRule)
-		return Decision{
-			RuleName: r.Name, ConfigDigest: digestInput(configJSON),
-			Action:  r.Action,
-			Message: msg,
-			RuleID:  r.ID,
-		}, true
-	}
-	return Decision{}, false
-}
-
 // SetRulesForTest installs rules (in priority order) as the loaded rule set, with
 // the default intercept-enabled tools, on an interceptor that may have no
 // database. It is a test seam for the guard package, which cannot reach the
@@ -802,6 +772,19 @@ func (i *Interceptor) Log(ctx context.Context, convID int64, dec Decision, toolN
 	if err == nil {
 		i.bindResult(ctx, id, audit)
 	}
+}
+
+// LogNoWait records a system refusal for a rule ask that cannot wait for approval.
+func (i *Interceptor) LogNoWait(ctx context.Context, dec Decision, toolName string, input []byte, reason string) {
+	if i.db == nil {
+		return
+	}
+	taskID, agentName := taskInfoFromCtx(ctx)
+	audit := auditFor(ctx, dec, input, "denied")
+	if strings.HasPrefix(dec.Message, db.ModelReasonPrefix) {
+		reason = db.ModelReasonPrefix + " " + reason
+	}
+	_, _ = i.db.CreateSystemDeniedIntercept(dec.RuleID, ConvIDFromContext(ctx), taskID, agentName, toolName, input, reason, audit)
 }
 
 // HandleAsk creates a pending approval record and blocks until the user decides
