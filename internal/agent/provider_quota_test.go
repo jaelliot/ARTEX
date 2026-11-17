@@ -16,6 +16,35 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+type endlessErrorBody struct {
+	read   int
+	closed bool
+}
+
+func (b *endlessErrorBody) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	b.read += len(p)
+	return len(p), nil
+}
+
+func (b *endlessErrorBody) Close() error { b.closed = true; return nil }
+
+func TestProviderErrorBodyIsBoundedAndClosed(t *testing.T) {
+	for _, status := range []int{429, 500} {
+		body := &endlessErrorBody{}
+		transport := quotaAwareTransport{base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Body: body}, nil
+		})}
+		req, _ := http.NewRequest(http.MethodPost, "http://model.invalid", nil)
+		resp, err := transport.RoundTrip(req)
+		if err == nil || resp != nil || body.read != maxProviderErrorBody+1 || !body.closed {
+			t.Fatalf("status=%d resp=%v err=%v read=%d closed=%v", status, resp, err, body.read, body.closed)
+		}
+	}
+}
+
 func TestIsQuotaExhaustedMessage(t *testing.T) {
 	t.Parallel()
 	positive := []string{

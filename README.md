@@ -430,6 +430,13 @@ the server allocates at least 128,000 tokens. Check role-specific bindings and f
 
 **Concurrency**: work agents per task, in "System Settings" (default 3).
 
+**Inference diagnostics**: provider error responses are limited to 64 KiB. Raw
+HTTP recordings retain at most 4 MiB of the request and 4 MiB of responses across
+up to 16 attempts, with explicit truncation markers. Recording limits do not
+shorten the request sent to the model or the stream delivered to ARTEX. No request
+snapshot is copied when raw recording is disabled. These limits do not impose
+database disk quotas or a global inference memory budget.
+
 **Untrusted-output boundary (on by default)**: tool results for the worker, planner, chat and main
 agent are framed between nonce-tagged markers to label them as untrusted data. Model compliance is
 not guaranteed.

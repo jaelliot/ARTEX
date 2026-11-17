@@ -1,0 +1,37 @@
+[Unit]
+Description=ARTEX offline tool worker broker
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=artex-worker
+WorkingDirectory=/opt/artex-worker
+RuntimeDirectory=artex-worker
+RuntimeDirectoryMode=0750
+ExecStartPre=/usr/bin/env -i PATH=/usr/bin:/bin HOME=/var/empty /opt/artex-worker/cleanup-offline-workers
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin HOME=/var/empty TMPDIR=/run/artex-worker /usr/bin/python3 -I /opt/artex-worker/worker_broker.py /run/artex-worker/worker.sock --group
+ExecStopPost=/usr/bin/env -i PATH=/usr/bin:/bin HOME=/var/empty /opt/artex-worker/cleanup-offline-workers
+KillMode=mixed
+TimeoutStartSec=45
+TimeoutStopSec=45
+Restart=no
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/artex-worker
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=128M
+CPUQuota=50%
+TasksMax=64
+LimitNOFILE=256
+LimitFSIZE=4M
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

@@ -15,6 +15,27 @@ import worker_broker as broker
 
 
 class WorkerBrokerTest(unittest.TestCase):
+    def test_broker_rejects_untrusted_installation(self):
+        broker.validate_installed_file(Path(sys.executable).resolve())
+        with tempfile.TemporaryDirectory() as tmp:
+            worker = Path(tmp) / "worker"
+            worker.write_text("#!/bin/sh\nexit 0\n")
+            worker.chmod(0o700)
+            with self.assertRaises(ValueError):
+                broker.validate_installed_file(worker)
+            link = Path(tmp) / "linked-worker"
+            link.symlink_to(Path(sys.executable).resolve())
+            with self.assertRaises(ValueError):
+                broker.validate_installed_file(link)
+
+    def test_uncertain_cleanup_stops_broker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worker = Path(tmp) / "worker"
+            worker.write_text("#!/bin/sh\nexit 125\n")
+            worker.chmod(0o700)
+            with self.assertRaises(SystemExit):
+                broker.run_worker(b"test", worker)
+
     def test_request_is_a_bounded_script_only(self):
         self.assertEqual(broker.parse_request(b'{"script":"echo hello"}\n'), b"echo hello")
         for line in (b'{}\n', b'{"script": 1}\n', b'{"script":"x","image":"other"}\n',
@@ -32,14 +53,13 @@ class WorkerBrokerTest(unittest.TestCase):
                 result = broker.run_worker(b'echo "$(not-a-host-command)"\n', worker)
             self.assertEqual(result, {"ok": True, "output": 'home=/var/empty\necho "$(not-a-host-command)"\n'})
 
-    def test_worker_output_cannot_exceed_the_file_limit(self):
+    def test_output_limit_stops_broker_if_launcher_is_killed(self):
         with tempfile.TemporaryDirectory() as tmp:
             worker = Path(tmp) / "worker"
             worker.write_text("#!/bin/sh\nhead -c 3145728 /dev/zero\n")
             worker.chmod(0o700)
-            result = broker.run_worker(b"ignored", worker)
-            self.assertFalse(result["ok"])
-            self.assertLessEqual(len(result["output"]), broker.MAX_OUTPUT)
+            with self.assertRaises(SystemExit):
+                broker.run_worker(b"ignored", worker)
 
     def test_offline_worker_uses_pinned_image_and_cleans_up(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,6 +90,29 @@ esac
             self.assertIn("none", args)
             self.assertIn("ALL", args)
             self.assertTrue((root / "removed").exists())
+
+    def test_failed_docker_removal_stops_broker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docker = root / "docker"
+            docker.write_text('''#!/bin/sh
+case "$1 $2" in
+  "image inspect")
+    if [ "$4" = '{{.Id}}' ]; then echo sha256:fixture; else echo 0; fi ;;
+  "inspect "*) exit 1 ;;
+  "create "*) exit 0 ;;
+  "start "*) cat ;;
+  "rm -f") exit 1 ;;
+  *) exit 1 ;;
+esac
+''')
+            docker.chmod(0o700)
+            launcher = root / "launcher"
+            launcher.write_text("#!/bin/sh\nexport PATH=" + shlex.quote(tmp) + ":/usr/bin:/bin\n"
+                                "exec " + shlex.quote(str(broker.WORKER)) + "\n")
+            launcher.chmod(0o700)
+            with self.assertRaises(SystemExit):
+                broker.run_worker(b"echo harmless\n", launcher)
 
     def test_interrupted_broker_stops_its_worker(self):
         with tempfile.TemporaryDirectory() as tmp:

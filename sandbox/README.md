@@ -121,14 +121,52 @@ prototype alone does not make the server's own tools safe to use.
 that prototype. Setting `ARTEX_OFFLINE_WORKER_SOCKET` selects an experimental
 mode that routes model-invoked Bash through the broker and disables other agent,
 custom, and MCP tools. Each call has a fresh workspace, so files do not persist
-between calls. The broker is not installed or deployed by these instructions,
-and this mode has not been verified end to end with the full ARTEX image. Keep
-using only the connection test until deployment and all execution paths have
-been independently verified.
-Before deployment, the broker and worker launcher must be installed in a
-trusted location that the ARTEX server cannot modify, and the socket's identity
-and access must be verified. Container cleanup after broker or Docker failure
-also needs verification.
+between calls. Normal sandbox startup does not activate this mode. Full ARTEX
+image compatibility and end-to-end agent execution with that image remain
+unverified; keep using only the connection test until those checks pass.
+
+`sudo ./install-worker`, run inside the VM, stages root-owned files under
+`/opt/artex-worker` and installs `artex-worker.service` without starting it. One
+broker per VM is supported. The service creates a root-owned socket in
+`/run/artex-worker`, accessible to the `artex-worker` group. It has a private
+network, a read-only system, no capabilities, and CPU/memory/process/file limits.
+The Docker daemon remains a privileged part of the trusted broker boundary.
+The ARTEX client must receive only a read-only bind of that socket directory and
+the numeric client group, with a non-root identity. Never give the client or a
+worker the engine socket or write access to the installed broker files.
+
+The broker rejects writable, symlinked, or non-root-owned installed code paths.
+Workers are labeled `com.artex.worker=offline`; the service removes only those
+workers before startup and after shutdown. Cleanup failure stops the broker;
+it does not automatically restart. Inspect the daemon and remaining labeled
+containers before restarting after a failure. This does not provide persistent
+disk quotas or recovery guarantees during a Docker-daemon outage.
+
+`check-deployed-worker.py SOCKET` is a dummy-only check intended for a
+networkless, non-root client container with the broker directory mounted
+read-only. It verifies the root peer, socket permissions, worker identity,
+read-only root, capabilities, seccomp, AppArmor, network interfaces, absent
+Docker socket, and disposable workspaces. `TestDeployedBroker` in
+`internal/worker/deployed_test.go` is separately enabled only by
+`ARTEX_TEST_WORKER_SOCKET` in a dedicated fixture; ordinary tests never contact a
+deployed broker. The cached basic worker image does not contain the complete
+ARTEX scanner/browser collection.
+
+On 2026-11-16, a temporary service in the Vagrant VM passed the dummy client
+checks against real Docker workers. The Go client passed fresh-workspace,
+cancellation, and subsequent-job recovery checks. A broker SIGKILL caused the
+service to remove its active worker without restarting; startup reconciliation
+removed a labeled orphan while leaving the unrelated regression container
+running. A seeded dummy broker environment value did not reach the worker;
+the client could not read a root-only dummy broker file, and the worker had no
+broker mount. Seventeen Python tests, the focused Go regressions, and the recording
+race tests passed. These observations cover the basic cached image and temporary
+service fixture, not a deployed ARTEX server or the full scanner/browser image.
+
+Failed startup checks disconnect the gateway's internal cable. Failed gateway
+installation brings its internal interface down and stops the proxy; installation
+loads the firewall before bringing the interface up. The mocked lifecycle tests
+verify failure ordering without modifying real VM or service state.
 
 Use `./stop` from `sandbox/` to halt ARTEX first and then the gateway. A
 Vagrant-managed gateway restart leaves its internal cable disconnected until
