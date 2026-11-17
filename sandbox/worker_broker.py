@@ -20,6 +20,17 @@ MAX_OUTPUT = 2 * 1024 * 1024
 WORKER = Path(__file__).resolve().with_name("offline-worker")
 
 
+def validate_installed_file(path, owner=0):
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("installed path must be absolute")
+    for item in (path, *path.parents):
+        info = item.lstat()
+        expected = stat.S_ISREG if item == path else stat.S_ISDIR
+        if not expected(info.st_mode) or info.st_uid != owner or info.st_mode & 0o022:
+            raise ValueError("broker and launcher must be root-owned in non-writable directories without symlinks")
+
+
 def parse_request(line):
     if len(line) > MAX_REQUEST or not line.endswith(b"\n"):
         raise ValueError("request is too large or incomplete")
@@ -46,6 +57,10 @@ def run_worker(script, worker=WORKER, canceled=None):
         )
         stopping = False
 
+        def check_cleanup():
+            if process.returncode == 125 or process.returncode is not None and process.returncode < 0:
+                raise SystemExit("worker cleanup is uncertain; broker is shutting down for inspection")
+
         def stop():
             nonlocal stopping
             stopping = True
@@ -64,6 +79,7 @@ def run_worker(script, worker=WORKER, canceled=None):
                     process.communicate(timeout=5)
                 except subprocess.TimeoutExpired as exc:
                     raise SystemExit("worker did not stop; broker is shutting down") from exc
+            check_cleanup()
 
         deadline = time.monotonic() + 180
         pending_input = script
@@ -84,6 +100,7 @@ def run_worker(script, worker=WORKER, canceled=None):
             if not stopping and process.poll() is None:
                 stop()
         output.seek(0)
+        check_cleanup()
         body = output.read(MAX_OUTPUT).decode("utf-8", errors="replace")
         return {"ok": process.returncode == 0, "output": body}
 
@@ -127,8 +144,14 @@ class WorkerHandler(socketserver.StreamRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("socket", type=Path, help="new Unix socket path in a trusted directory")
-    parser.add_argument("--group", type=int, help="numeric group allowed to connect")
+    parser.add_argument("--group", type=int, nargs="?", const=os.getegid(),
+                        help="numeric group allowed to connect (current group if no ID supplied)")
     args = parser.parse_args()
+    try:
+        validate_installed_file(Path(__file__).absolute())
+        validate_installed_file(WORKER)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     if args.group is not None and not 0 <= args.group < 2**32 - 1:
         parser.error("group must be a non-negative numeric group ID")
     path = args.socket

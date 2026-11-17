@@ -6,25 +6,31 @@ image=${ARTEX_OFFLINE_WORKER_IMAGE:-golang:1.25.8-bookworm}
 name="artex-offline-worker-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 created=0
 cleanup() {
-  if (( created )); then timeout 15 docker rm -f "$name" >/dev/null 2>&1 || true; fi
+  if (( created )); then
+    if ! timeout --foreground --kill-after=5 15 docker rm -f "$name" >/dev/null 2>&1; then
+      echo "Worker cleanup could not be verified; stop accepting jobs and inspect Docker." >&2
+      exit 125
+    fi
+  fi
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-image_id=$(timeout 15 docker image inspect -f '{{.Id}}' "$image")
-volumes=$(timeout 15 docker image inspect -f '{{len .Config.Volumes}}' "$image_id")
+image_id=$(timeout --foreground --kill-after=5 15 docker image inspect -f '{{.Id}}' "$image")
+volumes=$(timeout --foreground --kill-after=5 15 docker image inspect -f '{{len .Config.Volumes}}' "$image_id")
 if [[ $volumes != 0 ]]; then
   echo "Worker image must not declare writable volumes" >&2
   exit 1
 fi
-if timeout 15 docker inspect "$name" >/dev/null 2>&1; then
+if timeout --foreground --kill-after=5 15 docker inspect "$name" >/dev/null 2>&1; then
   echo "Worker container name already exists" >&2
   exit 1
 fi
 created=1
 
-timeout 30 docker create --pull never --name "$name" -i --network none --read-only \
+timeout --foreground --kill-after=5 30 docker create --pull never --name "$name" -i --network none --read-only \
+  --label com.artex.worker=offline \
   --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
   --security-opt apparmor=docker-default --security-opt seccomp=builtin \
   --memory 512m --memory-swap 512m --cpus 1 --pids-limit 64 --shm-size 16m \
@@ -35,7 +41,7 @@ timeout 30 docker create --pull never --name "$name" -i --network none --read-on
   PATH=/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/tmp /bin/bash -s >/dev/null
 
 set +e
-timeout 120 docker start -a -i "$name" 2>&1 | head -c 1048576
+timeout --foreground --kill-after=5 120 docker start -a -i "$name" 2>&1 | head -c 1048576
 statuses=("${PIPESTATUS[@]}")
 set -e
 if (( statuses[0] != 0 || statuses[1] != 0 )); then

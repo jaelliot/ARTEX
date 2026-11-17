@@ -493,6 +493,8 @@ type quotaAwareTransport struct {
 	userAgent string
 }
 
+const maxProviderErrorBody = 64 << 10
+
 func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Custom session-id header: name is user-configured, value is THIS run's
 	// session id (norma stashes it on the context via transcript.WithSessionID).
@@ -513,7 +515,9 @@ func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// them: norma builds the request body internally and decodes the SSE response
 	// before either reaches the recorder.
 	capt := llmrec.CaptureFrom(req.Context())
-	capt.SetRequest(requestBodySnapshot(req))
+	if capt != nil {
+		capt.SetRequest(requestBodySnapshot(req))
+	}
 
 	resp, err := t.base.RoundTrip(req)
 	if err != nil || resp == nil {
@@ -524,24 +528,27 @@ func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// capture before being replaced.
 	resp.Body = capt.TeeResponse(resp.StatusCode, resp.Body)
 
-	if resp.StatusCode != http.StatusTooManyRequests {
+	if resp.StatusCode < http.StatusBadRequest {
 		return resp, nil
 	}
-	body, readErr := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxProviderErrorBody+1))
 	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("llm: read provider error response: %w", readErr)
+	}
+	if len(body) > maxProviderErrorBody {
+		return nil, fmt.Errorf("llm: provider error response exceeds %d bytes", maxProviderErrorBody)
+	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))
-	if readErr != nil {
-		return resp, nil
-	}
-	if IsQuotaExhaustedMessage(string(body)) {
+	if resp.StatusCode == http.StatusTooManyRequests && IsQuotaExhaustedMessage(string(body)) {
 		resp.StatusCode = http.StatusPaymentRequired
 		resp.Status = "402 Payment Required"
 	}
 	return resp, nil
 }
 
-// requestBodySnapshot copies an outgoing request body without consuming it.
+// requestBodySnapshot copies a bounded prefix without consuming the real body.
 // norma builds every model request from a *bytes.Reader, so net/http populates
 // GetBody and the copy has no effect on what gets sent.
 func requestBodySnapshot(req *http.Request) string {
@@ -553,7 +560,7 @@ func requestBodySnapshot(req *http.Request) string {
 		return ""
 	}
 	defer rc.Close()
-	b, err := io.ReadAll(rc)
+	b, err := io.ReadAll(io.LimitReader(rc, llmrec.MaxCaptureBytes+1))
 	if err != nil {
 		return ""
 	}

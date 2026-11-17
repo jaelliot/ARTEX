@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 stage=/home/vagrant/artex-gateway-stage
+contain_failure() {
+  local status=$?
+  if (( status != 0 )); then
+    sudo -n ip link set enp0s8 down || echo "Could not disable the internal gateway interface." >&2
+    sudo -n systemctl stop artex-proxy.service || echo "Could not stop the inference proxy." >&2
+  fi
+}
+trap contain_failure EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 sudo -n systemctl disable --now docker.socket docker.service
 sudo -n install -d -m 0755 /etc/artex-gateway
 sudo -n install -m 0644 "$stage/firewall.nft" "$stage/Caddyfile" /etc/artex-gateway/
@@ -14,10 +24,11 @@ sudo -n sed -i '/ # artex-inference$/d' /etc/hosts
 cat "$stage/host-entry" | sudo -n tee -a /etc/hosts >/dev/null
 sudo -n sshd -t
 sudo -n systemctl reload ssh
-sudo -n ip link set enp0s8 up
-sudo -n ip addr replace 192.0.2.1/24 dev enp0s8
-sudo -n networkctl reload
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable artex-firewall.service artex-proxy.service
 sudo -n systemctl restart artex-firewall.service
+sudo -n ip addr replace 192.0.2.1/24 dev enp0s8
+sudo -n networkctl reload
+sudo -n ip link set enp0s8 up
 sudo -n systemctl restart artex-proxy.service
+sudo -n systemctl is-active --quiet artex-firewall.service artex-proxy.service

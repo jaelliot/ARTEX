@@ -10,7 +10,14 @@ import (
 
 type captureContextKey struct{}
 
-// Capture collects the untouched wire bodies of one logical LLM call. The
+// MaxCaptureBytes limits each request snapshot and the combined response bytes
+// retained across retries. It does not limit the request or stream on the wire.
+const MaxCaptureBytes = 4 << 20
+
+const maxCaptureAttempts = 16
+const captureTruncated = "\n... [recording truncated] ..."
+
+// Capture collects bounded wire snapshots of one logical LLM call. The
 // Recorder creates it and puts it on the context; the HTTP transport that norma
 // dials through (agent.quotaAwareTransport) finds it there and fills it in.
 //
@@ -20,21 +27,25 @@ type captureContextKey struct{}
 // debugging a live provider, the bytes on the wire are the only ground truth.
 //
 // norma's doStream retries the request-establishment phase, so one Stream can
-// issue several HTTP attempts. Each attempt is kept: the discarded ones (see
+// issue several HTTP attempts. Attempts are retained up to maxCaptureAttempts:
+// the discarded ones (see
 // norma/llm/retry.go, which closes non-final bodies unread) are exactly what
 // makes rate-limit and gateway failures diagnosable.
 //
 // The transport writes from norma's stream-reading goroutine while the Recorder
 // snapshots at stream end, so all state is mutex-guarded.
 type Capture struct {
-	mu       sync.Mutex
-	request  string
-	attempts []*attempt
+	mu              sync.Mutex
+	request         string
+	attempts        []*attempt
+	responseBytes   int
+	attemptsOmitted bool
 }
 
 type attempt struct {
-	status int
-	body   strings.Builder
+	status    int
+	body      strings.Builder
+	truncated bool
 }
 
 // NewCapture returns a context carrying a fresh Capture, plus the Capture itself.
@@ -63,21 +74,28 @@ func (c *Capture) SetRequest(body string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.request == "" {
-		c.request = body
+		c.request = strings.Clone(body[:min(len(body), MaxCaptureBytes)])
+		if len(body) > MaxCaptureBytes {
+			c.request += captureTruncated
+		}
 	}
 }
 
-// TeeResponse opens a new attempt and wraps rc so everything read from it is
-// mirrored into that attempt. It tees rather than reads because a successful
+// TeeResponse opens an attempt and mirrors reads within the shared byte budget.
+// It tees rather than reads because a successful
 // response is an SSE stream that must keep streaming to the caller.
 func (c *Capture) TeeResponse(status int, rc io.ReadCloser) io.ReadCloser {
 	if c == nil || rc == nil {
 		return rc
 	}
-	a := &attempt{status: status}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.attempts) == maxCaptureAttempts {
+		c.attemptsOmitted = true
+		return rc
+	}
+	a := &attempt{status: status}
 	c.attempts = append(c.attempts, a)
-	c.mu.Unlock()
 	return &teeBody{rc: rc, c: c, a: a}
 }
 
@@ -105,18 +123,28 @@ func (c *Capture) RawResponse() string {
 	case 0:
 		return ""
 	case 1:
-		return c.attempts[0].body.String()
+		return c.attempts[0].text()
 	}
 	var b strings.Builder
 	for i, a := range c.attempts {
 		fmt.Fprintf(&b, "===== attempt %d/%d — HTTP %d =====\n", i+1, len(c.attempts), a.status)
-		body := a.body.String()
+		body := a.text()
 		b.WriteString(body)
 		if !strings.HasSuffix(body, "\n") {
 			b.WriteByte('\n')
 		}
 	}
+	if c.attemptsOmitted {
+		b.WriteString("... [additional recording attempts omitted] ...\n")
+	}
 	return b.String()
+}
+
+func (a *attempt) text() string {
+	if a.truncated {
+		return a.body.String() + captureTruncated
+	}
+	return a.body.String()
 }
 
 // Attempt is one HTTP round trip's status code and response bytes.
@@ -136,7 +164,7 @@ func (c *Capture) Attempts() []Attempt {
 	defer c.mu.Unlock()
 	out := make([]Attempt, 0, len(c.attempts))
 	for _, a := range c.attempts {
-		out = append(out, Attempt{Status: a.status, Body: a.body.String()})
+		out = append(out, Attempt{Status: a.status, Body: a.text()})
 	}
 	return out
 }
@@ -153,7 +181,12 @@ func (t *teeBody) Read(p []byte) (int, error) {
 	n, err := t.rc.Read(p)
 	if n > 0 {
 		t.c.mu.Lock()
-		t.a.body.Write(p[:n])
+		keep := min(n, MaxCaptureBytes-t.c.responseBytes)
+		t.a.body.Write(p[:keep])
+		t.c.responseBytes += keep
+		if keep < n {
+			t.a.truncated = true
+		}
 		t.c.mu.Unlock()
 	}
 	return n, err

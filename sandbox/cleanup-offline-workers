@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# One broker per VM. Only its explicitly labeled workers are eligible.
+ids=$(timeout --foreground --kill-after=5 15 docker ps -aq --no-trunc --filter label=com.artex.worker=offline)
+while IFS= read -r id; do
+  [[ -z $id ]] && continue
+  if [[ ! $id =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Unexpected worker identity; refusing cleanup." >&2
+    exit 1
+  fi
+  timeout --foreground --kill-after=5 15 docker rm -f "$id" >/dev/null
+done <<<"$ids"

@@ -2,6 +2,21 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 export VAGRANT_CHECKPOINT_DISABLE=1
+disconnect_on_failure() {
+  local status=$?
+  if (( status != 0 )); then
+    local id_file="$root/inference-gateway/.vagrant/machines/default/virtualbox/id"
+    local id
+    if [[ -r $id_file ]] && id=$(cat "$id_file"); then
+      if ! VBoxManage controlvm "$id" setlinkstate2 off; then
+        echo "Could not disconnect the gateway; inspect its network state before continuing." >&2
+      fi
+    fi
+  fi
+}
+trap disconnect_on_failure EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 (
   cd "$root/inference-gateway"
   vagrant up --no-provision --provider=virtualbox
@@ -14,10 +29,7 @@ info=$(VBoxManage showvminfo "$gateway_id" --machinereadable)
 if grep -qx 'cableconnected2="off"' <<<"$info"; then
   python3 "$root/verify.py" --gateway-only --cable-off
   VBoxManage controlvm "$gateway_id" setlinkstate2 on
-  if ! python3 "$root/verify.py" --gateway-only; then
-    VBoxManage controlvm "$gateway_id" setlinkstate2 off
-    exit 1
-  fi
+  python3 "$root/verify.py" --gateway-only
 else
   python3 "$root/verify.py" --gateway-only
 fi

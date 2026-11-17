@@ -10,6 +10,39 @@ import (
 	"github.com/Autumn-27/artex/internal/llmrec"
 )
 
+func TestRequestSnapshotDoesNotLimitLargePrompt(t *testing.T) {
+	prompt := strings.Repeat("x", llmrec.MaxCaptureBytes+1024)
+	for _, recording := range []bool{false, true} {
+		req, _ := http.NewRequest(http.MethodPost, "http://model.invalid", strings.NewReader(prompt))
+		copies := 0
+		getBody := req.GetBody
+		req.GetBody = func() (io.ReadCloser, error) { copies++; return getBody() }
+		var capt *llmrec.Capture
+		if recording {
+			ctx, c := llmrec.NewCapture(req.Context())
+			req, capt = req.WithContext(ctx), c
+		}
+		transport := quotaAwareTransport{base: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			n, err := io.Copy(io.Discard, r.Body)
+			if err != nil || n != int64(len(prompt)) {
+				t.Fatalf("prompt changed on wire: n=%d err=%v", n, err)
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+		})}
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if !recording && copies != 0 {
+			t.Fatal("copied request with recording disabled")
+		}
+		if recording && (copies != 1 || len(capt.RawRequest()) > llmrec.MaxCaptureBytes+128 || !strings.Contains(capt.RawRequest(), "[recording truncated]")) {
+			t.Fatal("large request recording was not bounded and marked")
+		}
+	}
+}
+
 // The transport is the only layer that still sees the wire bodies: norma builds
 // the request body internally and decodes the SSE response before the recorder
 // gets it. This checks the round trip preserves both directions untouched.

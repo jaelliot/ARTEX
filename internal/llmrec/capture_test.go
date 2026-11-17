@@ -101,3 +101,49 @@ func TestCaptureEmptyWhenNoHTTPHappened(t *testing.T) {
 		t.Fatal("unused capture should be empty")
 	}
 }
+
+func TestCaptureBoundsRetriesWithoutChangingStreams(t *testing.T) {
+	_, c := NewCapture(context.Background())
+	chunk := strings.Repeat("x", MaxCaptureBytes/2+1024)
+	for i := 0; i < maxCaptureAttempts+2; i++ {
+		body := c.TeeResponse(200, io.NopCloser(strings.NewReader(chunk)))
+		n, err := io.Copy(io.Discard, body)
+		body.Close()
+		if err != nil || n != int64(len(chunk)) {
+			t.Fatalf("stream truncated: n=%d err=%v", n, err)
+		}
+	}
+	attempts := c.Attempts()
+	if len(attempts) != maxCaptureAttempts || c.responseBytes != MaxCaptureBytes {
+		t.Fatal("retry capture exceeds its budget")
+	}
+	if !strings.Contains(attempts[1].Body, "[recording truncated]") || !strings.Contains(c.RawResponse(), "[additional recording attempts omitted]") {
+		t.Fatal("recording truncation is not visible")
+	}
+	if len(c.RawResponse()) > MaxCaptureBytes+4096 {
+		t.Fatal("recorded response grew beyond bounded metadata")
+	}
+	c.SetRequest(strings.Repeat("q", MaxCaptureBytes+1024))
+	if len(c.RawRequest()) > MaxCaptureBytes+128 || !strings.Contains(c.RawRequest(), "[recording truncated]") {
+		t.Fatal("request recording exceeds budget")
+	}
+}
+
+func TestCaptureSnapshotsWhileReading(t *testing.T) {
+	_, c := NewCapture(context.Background())
+	body := c.TeeResponse(200, io.NopCloser(strings.NewReader(strings.Repeat("x", MaxCaptureBytes+1024))))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+	for i := 0; i < 10; i++ {
+		_ = c.RawResponse()
+		_ = c.Attempts()
+	}
+	<-done
+	if !strings.Contains(c.RawResponse(), "[recording truncated]") {
+		t.Fatal("concurrent recording lost its truncation marker")
+	}
+}
